@@ -35,6 +35,7 @@ add_library(gamecube_core STATIC
     src/app/frame_control.c
     src/app/input_control.c
     src/audio/audio.c
+    src/audio/audio_capture.c
     src/audio/audio_dsp.c
     src/audio/audio_envelope.c
     src/audio/audio_math.c
@@ -110,6 +111,11 @@ target_include_directories(gamecube_scene PUBLIC include PRIVATE src)
 target_link_libraries(gamecube_scene PUBLIC gamecube_core)
 gc_warnings(gamecube_scene)
 
+add_library(gamecube_recording STATIC src/app/recording.c)
+target_include_directories(gamecube_recording PUBLIC src)
+target_link_libraries(gamecube_recording PUBLIC gamecube_core console_common_capture)
+gc_warnings(gamecube_recording)
+
 # The offline backend is shared by capture tools and headless scene tests.
 add_library(gamecube_software STATIC
     src/render/software/software.c
@@ -161,7 +167,7 @@ if(GC_BUILD_APP)
         add_executable(gamecube-menu src/app/main.c src/app/app_options.c)
     endif()
     target_include_directories(gamecube-menu PRIVATE src)
-    target_link_libraries(gamecube-menu PRIVATE gamecube_scene)
+    target_link_libraries(gamecube-menu PRIVATE gamecube_scene gamecube_recording)
     cc_add_platform(gamecube-menu "${GC_BACKEND}")
     gc_warnings(gamecube-menu)
 endif()
@@ -261,15 +267,22 @@ if(BUILD_TESTING)
     add_test(NAME gc-frame-history COMMAND gc-frame-history-test)
     gc_test_executable(gc-app-tick-test
         tests/app/app_tick_test.c src/app/app_options.c)
-    target_link_libraries(gc-app-tick-test PRIVATE gamecube_scene gamecube_software)
+    target_link_libraries(gc-app-tick-test PRIVATE
+        gamecube_scene gamecube_recording gamecube_software)
     gc_test_executable(gc-app-control-test
         tests/app/app_control_test.c src/app/app_options.c)
-    target_link_libraries(gc-app-control-test PRIVATE gamecube_scene gamecube_software)
+    target_link_libraries(gc-app-control-test PRIVATE
+        gamecube_scene gamecube_recording gamecube_software)
     add_test(NAME gc-app-window-controls COMMAND gc-app-control-test)
     gc_test_executable(gc-app-options-test
         tests/app/app_options_test.c src/app/app_options.c)
     target_link_libraries(gc-app-options-test PRIVATE gamecube_core)
     add_test(NAME gc-app-options COMMAND gc-app-options-test)
+    gc_test_executable(gc-recording-test tests/capture/recording_test.c)
+    target_link_libraries(gc-recording-test PRIVATE gamecube_recording gamecube_software)
+    add_test(NAME gc-recording COMMAND gc-recording-test
+        "${CMAKE_BINARY_DIR}/tests/recording")
+    gc_test_directory(gc-recording recording)
     if(GC_BUILD_APP)
         add_test(NAME gc-cli-help COMMAND gamecube-menu --help)
         add_test(NAME gc-cli-inspection-flags COMMAND gamecube-menu --delaystart --step --help)

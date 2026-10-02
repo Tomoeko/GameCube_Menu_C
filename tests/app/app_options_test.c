@@ -7,7 +7,8 @@ static void test_defaults_and_region_paths(void) {
     GcAppOptions options;
     char *defaults[] = {"gamecube-menu"};
     assert(gc_app_options_parse(&options, 1, defaults) == GC_APP_OPTIONS_OK);
-    assert(options.region == GC_REGION_USA && !options.inspect_frames);
+    assert(options.region == GC_REGION_USA && !options.inspect_frames &&
+           !options.record);
     assert(!strcmp(options.ipl_path, "Files/GameCube_BIOS/USA/IPL.bin"));
     assert(!strcmp(options.state_path, "Files/state-usa.dat"));
     const char *regions[] = {"JAP", "USA", "EUR"};
@@ -47,6 +48,57 @@ static void test_inspection_and_overrides(void) {
     assert(options.skip_startup && options.boot_phase == GC_BOOT_SETTINGS_NOTICE);
     assert(options.startup_sound == 2 && options.frame_limit == 15);
     assert(options.config_path == remaining[9] && options.disc_path == remaining[11]);
+}
+
+static void test_recording_arguments(void) {
+    GcAppOptions options;
+    char *record[] = {"gamecube-menu", "--record"};
+    assert(gc_app_options_parse(&options, 2, record) == GC_APP_OPTIONS_OK);
+    assert(options.record && !options.record_half && options.region == GC_REGION_USA);
+    assert(!options.delay_start && !options.inspect_frames && !options.frame_limit);
+
+    char *manual[] = {"gamecube-menu", "--delaystart", "--record", "--step",
+                      "--region",      "EUR",          "--frames", "15"};
+    assert(gc_app_options_parse(&options, 8, manual) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.delay_start && !options.timed_start);
+    assert(options.inspect_frames && options.region == GC_REGION_EUROPE);
+    assert(options.frame_limit == 15);
+    assert(!strcmp(options.state_path, "Files/state-eur.dat"));
+
+    char *half[] = {"gamecube-menu", "--delaystart", "--record", "half", "--step"};
+    assert(gc_app_options_parse(&options, 5, half) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.record_half && options.inspect_frames);
+    assert(options.delay_start && !options.timed_start);
+
+    char *full_after_half[] = {"gamecube-menu", "--record", "half", "--record"};
+    assert(gc_app_options_parse(&options, 4, full_after_half) == GC_APP_OPTIONS_OK);
+    assert(options.record && !options.record_half);
+
+    char *half_after_full[] = {"gamecube-menu", "--record", "--record", "half"};
+    assert(gc_app_options_parse(&options, 4, half_after_full) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.record_half);
+
+    char *timed[] = {"gamecube-menu", "--record", "--delaystart", "5.5", "--step",
+                     "--frames",      "240",      "--region",     "JAP"};
+    assert(gc_app_options_parse(&options, 9, timed) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.delay_start && options.timed_start);
+    assert(options.startup_delay_seconds == 5.5 && options.inspect_frames);
+    assert(options.frame_limit == 240 && options.region == GC_REGION_JAPAN);
+
+    char *repeated[] = {"gamecube-menu", "--record", "--delaystart", "--record"};
+    assert(gc_app_options_parse(&options, 4, repeated) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.delay_start && !options.timed_start);
+
+    GcAppOptions original = options;
+    char *invalid_value[] = {"gamecube-menu", "--record", "capture.mp4"};
+    assert(gc_app_options_parse(&options, 3, invalid_value) == GC_APP_OPTIONS_INVALID);
+    assert(!memcmp(&options, &original, sizeof(options)));
+    char *invalid_count[] = {"gamecube-menu", "--record", "--frames", "0"};
+    assert(gc_app_options_parse(&options, 4, invalid_count) == GC_APP_OPTIONS_INVALID);
+    assert(!memcmp(&options, &original, sizeof(options)));
+    char *help[] = {"gamecube-menu", "--record", "--help"};
+    assert(gc_app_options_parse(&options, 3, help) == GC_APP_OPTIONS_HELP);
+    assert(!memcmp(&options, &original, sizeof(options)));
 }
 
 static void test_invalid_arguments_are_atomic(void) {
@@ -93,6 +145,7 @@ static void test_invalid_arguments_are_atomic(void) {
 int main(void) {
     test_defaults_and_region_paths();
     test_inspection_and_overrides();
+    test_recording_arguments();
     test_invalid_arguments_are_atomic();
     return 0;
 }

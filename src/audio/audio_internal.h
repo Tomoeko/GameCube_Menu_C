@@ -5,6 +5,8 @@
 
 #include <stdatomic.h>
 
+typedef struct CcAudioBuffer CcAudioBuffer;
+
 #define GC_AUDIO_WAVES 32
 #define GC_AUDIO_CHILD_TRACKS 256
 #define GC_AUDIO_TRACKS (GC_AUDIO_CHILD_TRACKS + 1)
@@ -249,6 +251,7 @@ struct GcAudio {
     uint64_t notes_started;
     uint32_t rejected_commands;
     void *device;
+    CcAudioBuffer *capture;
 };
 
 /* Loading owns decoded samples/sequence; the ROM is borrowed and may be
@@ -259,6 +262,7 @@ bool gc_audio_resources_decode(GcAudio *audio, uint8_t *rom, size_t size);
 bool gc_audio_resources_load(GcAudio *audio, const char *ipl_path);
 void gc_audio_resources_release(GcAudio *audio);
 void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]);
+void gc_audio_capture_output(GcAudio *audio, const float *stereo, size_t frames);
 void gc_audio_dsp_voice_begin(GcAudio *audio, GcAudioVoice *voice, bool mono);
 
 void gc_audio_sequence_init(GcAudio *audio);

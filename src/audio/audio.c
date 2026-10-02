@@ -1,5 +1,6 @@
 #include "audio_internal.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,7 @@ void gc_audio_destroy(GcAudio *audio) {
     if (!audio)
         return;
     gc_audio_device_stop(audio);
+    gc_audio_capture_end(audio);
     gc_audio_resources_release(audio);
     free(audio);
 }
@@ -103,6 +105,10 @@ bool gc_audio_stop_sequence(GcAudio *audio) {
     return queue_event(audio, 0x104, 0);
 }
 
+unsigned gc_audio_sample_rate(const GcAudio *audio) {
+    return audio ? audio->sample_rate : 0;
+}
+
 unsigned gc_audio_active_voices(const GcAudio *audio) {
     return audio ? atomic_load_explicit(&audio->active_voices, memory_order_acquire)
                  : 0;
@@ -159,6 +165,7 @@ void gc_audio_render(GcAudio *audio, float *stereo, size_t frames) {
     for (unsigned voice = 0; voice < GC_AUDIO_VOICES; ++voice)
         active += audio->voices[voice].active ? 1u : 0u;
     atomic_store_explicit(&audio->active_voices, active, memory_order_release);
+    gc_audio_capture_output(audio, stereo, frames);
 }
 
 void gc_audio_info(const GcAudio *audio, GcAudioInfo *info) {

@@ -18,6 +18,8 @@ struct CcPlatform {
     GcSoftwareTexture textures[GC_SOFTWARE_TEXTURES];
     CcClipRect clip;
     float fade_alpha;
+    bool capture_active;
+    bool capture_ready;
 };
 
 uint64_t gc_software_frame_hash(const CcPlatform *platform) {
@@ -81,6 +83,7 @@ bool cc_platform_set_fullscreen(CcPlatform *platform, bool fullscreen) {
 void cc_platform_begin(CcPlatform *platform, CcColor clear) {
     if (!platform)
         return;
+    platform->capture_ready = false;
     for (size_t pixel = 0; pixel < sizeof(platform->pixels); pixel += 4) {
         platform->pixels[pixel] = channel(clear.r);
         platform->pixels[pixel + 1] = channel(clear.g);
@@ -332,12 +335,40 @@ void cc_platform_set_fade_alpha(CcPlatform *platform, float alpha) {
 }
 
 void cc_platform_end(CcPlatform *platform) {
-    if (!platform || platform->fade_alpha <= 0)
+    if (!platform)
         return;
-    CcQuad fade = {.width = CC_FRAME_WIDTH,
-                   .height = CC_FRAME_HEIGHT,
-                   .color = {0, 0, 0, platform->fade_alpha}};
-    cc_platform_draw_quad(platform, &fade);
+    if (platform->fade_alpha > 0) {
+        CcQuad fade = {.width = CC_FRAME_WIDTH,
+                       .height = CC_FRAME_HEIGHT,
+                       .color = {0, 0, 0, platform->fade_alpha}};
+        cc_platform_draw_quad(platform, &fade);
+    }
+    platform->capture_ready = platform->capture_active;
+}
+
+bool cc_platform_capture_begin(CcPlatform *platform, CcFramebuffer *output) {
+    if (!platform || !output || platform->capture_active)
+        return false;
+    platform->capture_active = true;
+    platform->capture_ready = false;
+    *output =
+        (CcFramebuffer){NULL, CC_FRAME_WIDTH, CC_FRAME_HEIGHT, CC_FRAME_WIDTH * 4};
+    return true;
+}
+
+bool cc_platform_capture_frame(CcPlatform *platform, CcFramebuffer *output) {
+    if (!platform || !output || !platform->capture_ready)
+        return false;
+    *output = (CcFramebuffer){platform->pixels, CC_FRAME_WIDTH, CC_FRAME_HEIGHT,
+                              CC_FRAME_WIDTH * 4};
+    return true;
+}
+
+void cc_platform_capture_end(CcPlatform *platform) {
+    if (!platform)
+        return;
+    platform->capture_active = false;
+    platform->capture_ready = false;
 }
 
 uint32_t cc_platform_create_texture(CcPlatform *platform, int width, int height,

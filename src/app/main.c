@@ -13,8 +13,10 @@
 #include "gamecube/frame_control.h"
 
 #include "app_options.h"
+#include "app/recording.h"
 #include <limits.h>
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,13 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
+
+static volatile sig_atomic_t application_exit_requested;
+
+static void request_application_exit(int signal_number) {
+    (void)signal_number;
+    application_exit_requested = 1;
+}
 
 static bool files_directory(void) {
     if (access("Files", F_OK) == 0)
@@ -298,7 +307,43 @@ typedef struct {
     bool inspection;
     bool timed_start;
     uint64_t startup_delay_ticks;
+    CcRecording *recording;
+    bool audio_started;
 } AppRuntime;
+
+static bool start_audio(AppRuntime *app) {
+    if (app->inspection || app->audio_started)
+        return true;
+    if (!gc_audio_device_start(app->audio))
+        return false;
+    double now;
+    if (app->recording &&
+        (!seconds_now(&now) || !cc_recording_audio_start(app->recording, now))) {
+        gc_audio_device_stop(app->audio);
+        return false;
+    }
+    app->audio_started = true;
+    return true;
+}
+
+static bool suspend_audio(AppRuntime *app) {
+    double now = NAN;
+    bool clock_valid = !app->recording || seconds_now(&now);
+    gc_audio_device_stop(app->audio);
+    app->audio_started = false;
+    return !app->recording ||
+           (cc_recording_audio_stop(app->recording, now) && clock_valid);
+}
+
+static bool record_video_frame(AppRuntime *app) {
+    if (!app->recording)
+        return true;
+    double now;
+    if (seconds_now(&now) && cc_recording_frame(app->recording, now))
+        return true;
+    fprintf(stderr, "Recording failed: %s\n", cc_recording_error(app->recording));
+    return false;
+}
 
 static bool startup_delay_ticks(double seconds, unsigned rate, uint64_t *ticks) {
     if (!ticks || !rate || !isfinite(seconds) || seconds < 0)
@@ -495,7 +540,7 @@ static bool advance_video_tick(AppRuntime *app) {
         if (!app->timed_start || runtime->startup_wait_ticks < app->startup_delay_ticks)
             return true;
         runtime->startup_waiting = false;
-        if (!app->inspection && !gc_audio_device_start(app->audio)) {
+        if (!start_audio(app)) {
             fprintf(stderr, "Could not open the audio output device.\n");
             return false;
         }
@@ -713,6 +758,8 @@ static void initialize_boot_input(GcBootInput *input, gc_disc_status disc,
 
 static bool restart_startup(AppRuntime *app, const GcAppOptions *options,
                             AppPlayback *playback) {
+    if (!suspend_audio(app))
+        return false;
     gc_audio_reset(app->audio);
     gc_frame_history_reset(app->history);
     destroy_presentations(app->presentations);
@@ -747,12 +794,12 @@ static bool restart_startup(AppRuntime *app, const GcAppOptions *options,
     playback->restart_requested = false;
     playback->history_changed = false;
     draw_video_frame(app);
-    if (!save_video_frame(app))
+    if (!record_video_frame(app) || !save_video_frame(app))
         return false;
     ++playback->frames;
     if (options->frame_limit && playback->frames >= options->frame_limit)
         playback->running = false;
-    return options->inspect_frames || gc_audio_device_start(app->audio);
+    return start_audio(app);
 }
 
 static int run_application(AppRuntime *app, const GcAppOptions *options) {
@@ -764,14 +811,18 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
         return EXIT_FAILURE;
     }
     draw_video_frame(app);
-    if (!save_video_frame(app)) {
+    if (!record_video_frame(app) || !save_video_frame(app)) {
         playback.running = false;
         result = EXIT_FAILURE;
     }
     ++playback.frames;
     if (options->frame_limit && playback.frames >= options->frame_limit)
         playback.running = false;
-    while (playback.running) {
+    if (playback.running && !app->runtime->startup_waiting && !start_audio(app)) {
+        fprintf(stderr, "Could not open the audio output device.\n");
+        return EXIT_FAILURE;
+    }
+    while (playback.running && !application_exit_requested) {
         playback.start_requested = false;
         poll_host_events(app, options, &playback);
         double now;
@@ -784,6 +835,12 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
         playback.last = now;
         if (!playback.running)
             break;
+        if (!cc_recording_pump(app->recording, now)) {
+            fprintf(stderr, "Recording failed: %s\n",
+                    cc_recording_error(app->recording));
+            result = EXIT_FAILURE;
+            break;
+        }
         if (playback.restart_requested) {
             if (!restart_startup(app, options, &playback) ||
                 !seconds_now(&playback.last)) {
@@ -796,7 +853,7 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
         if (playback.start_requested) {
             app->runtime->startup_waiting = false;
             playback.history_changed = true;
-            if (!options->inspect_frames && !gc_audio_device_start(app->audio)) {
+            if (!start_audio(app)) {
                 fprintf(stderr, "Could not open the audio output device.\n");
                 result = EXIT_FAILURE;
                 break;
@@ -826,7 +883,7 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                 ++app->counter;
             }
             draw_video_frame(app);
-            if (!restored && !save_video_frame(app)) {
+            if (!record_video_frame(app) || (!restored && !save_video_frame(app))) {
                 playback.running = false;
                 result = EXIT_FAILURE;
                 break;
@@ -1011,10 +1068,11 @@ int main(int argc, char **argv) {
         running = false;
         result = EXIT_FAILURE;
     }
-    if (running && !options.inspect_frames &&
-        (options.skip_startup || !options.delay_start) &&
-        !gc_audio_device_start(audio)) {
+    bool audio_started = running && !options.record && !options.inspect_frames &&
+                         (options.skip_startup || !options.delay_start);
+    if (audio_started && !gc_audio_device_start(audio)) {
         fprintf(stderr, "Could not open the audio output device.\n");
+        audio_started = false;
         running = false;
         result = EXIT_FAILURE;
     }
@@ -1053,9 +1111,33 @@ int main(int argc, char **argv) {
                       .card_revision = services->revision,
                       .inspection = options.inspect_frames,
                       .timed_start = options.timed_start,
-                      .startup_delay_ticks = delay_ticks};
+                      .startup_delay_ticks = delay_ticks,
+                      .audio_started = audio_started};
+    if (running && options.record) {
+        app.recording = gc_recording_open(platform, audio, scene.startup.frame_rate,
+                                          !options.inspect_frames, options.record_half);
+        if (!app.recording) {
+            fprintf(stderr, "Could not start recording in the Movies folder.\n");
+            running = false;
+            result = EXIT_FAILURE;
+        } else
+            fprintf(stderr, "Recording: %s\n", cc_recording_path(app.recording));
+    }
+    application_exit_requested = 0;
+    void (*previous_interrupt)(int) = signal(SIGINT, request_application_exit);
+    void (*previous_terminate)(int) = signal(SIGTERM, request_application_exit);
     if (running)
         result = run_application(&app, &options);
+    double recording_end = NAN;
+    bool recording_clock_valid = !app.recording || seconds_now(&recording_end);
+    gc_audio_device_stop(audio);
+    if (app.recording) {
+        if (!cc_recording_close(app.recording, recording_end) ||
+            !recording_clock_valid) {
+            fprintf(stderr, "Recording could not be finalized completely.\n");
+            result = EXIT_FAILURE;
+        }
+    }
     gc_frame_history_destroy(history);
     destroy_presentations(app.presentations);
     gc_card_runtime_destroy(&runtime.cards);
@@ -1067,5 +1149,9 @@ int main(int argc, char **argv) {
     gc_disc_destroy(&disc);
     free(services);
     free(menu);
+    if (previous_interrupt != SIG_ERR)
+        signal(SIGINT, previous_interrupt);
+    if (previous_terminate != SIG_ERR)
+        signal(SIGTERM, previous_terminate);
     return result;
 }

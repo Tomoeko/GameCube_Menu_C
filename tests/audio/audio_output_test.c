@@ -1,6 +1,7 @@
 #include "audio/audio_internal.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +78,7 @@ static void test_output_clock(unsigned rate, unsigned pattern) {
                                         : (index == 0 ? 24000 : 0);
     }
     GcAudio *audio = test_audio(rate, samples);
+    assert(gc_audio_sample_rate(audio) == rate);
     GcAudio *expected_audio = test_audio(rate, samples);
     HostReference reference;
     reference_begin(&reference, expected_audio);
@@ -175,7 +177,98 @@ static void test_chunks_and_reset(void) {
     free(single);
 }
 
+static void test_capture_wrapping(void) {
+    int16_t samples[257];
+    for (unsigned index = 0; index < 257; ++index)
+        samples[index] = (int16_t)((int)(index * 7919 % 60001) - 30000);
+    GcAudio *audio = test_audio(48000, samples);
+    assert(!gc_audio_capture_begin(NULL, 17));
+    assert(!gc_audio_capture_begin(audio, 0));
+    assert(!gc_audio_capture_begin(audio, SIZE_MAX));
+    assert(!gc_audio_capture_begin(audio, UINT_MAX));
+    audio->device = audio;
+    assert(!gc_audio_capture_begin(audio, 17));
+    audio->device = NULL;
+    float rendered[34];
+    float captured[34];
+    uint64_t first_sample = UINT64_MAX;
+    assert(gc_audio_capture_read(audio, captured, 17, &first_sample) == 0);
+    assert(first_sample == UINT64_MAX && !gc_audio_capture_failed(audio));
+    gc_audio_render(audio, rendered, 17);
+    assert(gc_audio_capture_begin(audio, 17));
+    assert(!gc_audio_capture_begin(audio, 17));
+    uint64_t completed = 0;
+    for (unsigned iteration = 0; iteration < 1000; ++iteration) {
+        size_t frames = 1 + iteration % 17;
+        gc_audio_render(audio, rendered, frames);
+        size_t received = 0;
+        while (received < frames) {
+            size_t count = 1 + (iteration + received) % 7;
+            size_t remaining = frames - received;
+            if (count > remaining)
+                count = remaining;
+            assert(gc_audio_capture_read(audio, captured, count, &first_sample) ==
+                   count);
+            assert(first_sample == completed + received);
+            assert(
+                !memcmp(rendered + received * 2, captured, count * 2 * sizeof(float)));
+            received += count;
+        }
+        completed += frames;
+        assert(gc_audio_capture_read(audio, captured, 17, &first_sample) == 0);
+        assert(first_sample == completed && !gc_audio_capture_failed(audio));
+    }
+    assert(gc_audio_capture_read(audio, NULL, 1, NULL) == 0);
+    assert(gc_audio_capture_read(audio, captured, 0, NULL) == 0);
+    assert(gc_audio_capture_read(audio, captured, SIZE_MAX, NULL) == 0);
+    gc_audio_capture_end(audio);
+    gc_audio_capture_end(audio);
+    assert(!gc_audio_capture_failed(audio));
+    free(audio);
+}
+
+static void test_capture_overflow_and_reset(void) {
+    int16_t samples[257];
+    for (unsigned index = 0; index < 257; ++index)
+        samples[index] = (int16_t)((int)(index * 7919 % 60001) - 30000);
+    GcAudio *audio = test_audio(48000, samples);
+    GcAudio *reference = test_audio(48000, samples);
+    assert(gc_audio_capture_begin(audio, 3));
+    float rendered[12];
+    float expected[12];
+    float captured[12];
+    gc_audio_render(audio, rendered, 2);
+    gc_audio_render(reference, expected, 2);
+    assert(!memcmp(rendered, expected, 4 * sizeof(float)));
+    gc_audio_render(audio, rendered + 4, 2);
+    gc_audio_render(reference, expected + 4, 2);
+    assert(!memcmp(rendered + 4, expected + 4, 4 * sizeof(float)));
+    assert(gc_audio_capture_failed(audio));
+    uint64_t first_sample = UINT64_MAX;
+    assert(gc_audio_capture_read(audio, captured, 6, &first_sample) == 2);
+    assert(first_sample == 0 && !memcmp(rendered, captured, 4 * sizeof(float)));
+    gc_audio_render(audio, rendered, 6);
+    gc_audio_render(reference, expected, 6);
+    assert(!memcmp(rendered, expected, sizeof(rendered)));
+    assert(gc_audio_capture_read(audio, captured, 6, NULL) == 0);
+    assert(gc_audio_capture_failed(audio));
+    gc_audio_capture_end(audio);
+    assert(gc_audio_capture_begin(audio, 6));
+    gc_audio_render(audio, rendered, 3);
+    gc_audio_reset(audio);
+    gc_audio_render(audio, rendered + 6, 3);
+    assert(gc_audio_capture_read(audio, captured, 4, &first_sample) == 4);
+    assert(first_sample == 0 && !memcmp(rendered, captured, 8 * sizeof(float)));
+    assert(gc_audio_capture_read(audio, captured, 4, &first_sample) == 2);
+    assert(first_sample == 4 && !memcmp(rendered + 8, captured, 4 * sizeof(float)));
+    assert(!gc_audio_capture_failed(audio));
+    gc_audio_capture_end(audio);
+    free(reference);
+    free(audio);
+}
+
 int main(void) {
+    assert(gc_audio_sample_rate(NULL) == 0);
     test_fraction_rounding();
     const unsigned rates[] = {8000,  11025, 22050, 32000, 42422,
                               44100, 48000, 96000, 192000};
@@ -184,6 +277,8 @@ int main(void) {
     test_output_clock(48000, 1);
     test_output_clock(48000, 2);
     test_chunks_and_reset();
+    test_capture_wrapping();
+    test_capture_overflow_and_reset();
     puts("Host audio output tests passed.");
     return 0;
 }

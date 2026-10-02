@@ -42,7 +42,8 @@ bool gc_audio_menu_end(GcAudio *audio);
  * like the event APIs; envelope and effect tails continue to render.
  */
 bool gc_audio_stop_sequence(GcAudio *audio);
-/* Atomic host queries are safe while the audio device is rendering. */
+/* The immutable rate and atomic host queries are safe while rendering. */
+unsigned gc_audio_sample_rate(const GcAudio *audio);
 unsigned gc_audio_active_voices(const GcAudio *audio);
 bool gc_audio_sequence_stopped(const GcAudio *audio);
 void gc_audio_set_mono(GcAudio *audio, bool mono);
@@ -51,6 +52,18 @@ void gc_audio_set_mono(GcAudio *audio, bool mono);
 void gc_audio_render(GcAudio *audio, float *stereo, size_t frames);
 /* Query on the rendering thread or while the device is stopped. */
 void gc_audio_info(const GcAudio *audio, GcAudioInfo *info);
+
+/* Capture the exact interleaved host output without file I/O on the rendering
+ * thread. Begin while rendering is stopped, then use one host-thread reader.
+ * The bounded queue fails explicitly on overflow; previously queued samples
+ * remain readable. Sample indices start at zero and survive gc_audio_reset.
+ * End stops the device before freeing the queue; do not read concurrently.
+ */
+bool gc_audio_capture_begin(GcAudio *audio, size_t capacity_frames);
+size_t gc_audio_capture_read(GcAudio *audio, float *stereo, size_t capacity_frames,
+                             uint64_t *first_sample_index);
+bool gc_audio_capture_failed(const GcAudio *audio);
+void gc_audio_capture_end(GcAudio *audio);
 
 /* IPL AFC codec: 9-byte frames, 16 samples, signed four-bit residuals.
  * History is most recent first and is updated on success. This low-level

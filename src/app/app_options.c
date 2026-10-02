@@ -67,6 +67,12 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
             return GC_APP_OPTIONS_HELP;
         if (!strcmp(flag, "--step")) {
             candidate.inspect_frames = true;
+        } else if (!strcmp(flag, "--record")) {
+            candidate.record = true;
+            candidate.record_half =
+                index + 1 < argc && argv[index + 1] && !strcmp(argv[index + 1], "half");
+            if (candidate.record_half)
+                ++index;
         } else if (!strcmp(flag, "--skip-startup")) {
             candidate.skip_startup = true;
         } else if (!strcmp(flag, "--delaystart")) {
@@ -112,6 +118,8 @@ void gc_app_options_usage(FILE *output) {
             "       [--config Files/config.ini] [--step]\n"
             "       [--boot-state normal|notice|lost]\n"
             "       [--delaystart [seconds]] (wait for input or a timed delay)\n"
+            "       [--record [half]] (compressed MP4 to Movies until exit)\n"
+            "       half records half width and height; audio stays unchanged.\n"
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
             "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
             "R restarts startup from frame 0 (preserving the --step pause state).\n"

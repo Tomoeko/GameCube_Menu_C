@@ -3,7 +3,10 @@
 #include "render/software/software.h"
 
 #include <assert.h>
+#include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <time.h>
 
 static int test_clock(clockid_t clock_id, struct timespec *value);
@@ -44,6 +47,9 @@ static CcEvent window_event;
 static bool window_fullscreen;
 static bool window_request_failure;
 static unsigned window_requests;
+static bool test_recording_events;
+static bool recording_fail_clock_on_quit;
+static bool recording_clock_failed;
 
 static bool test_is_fullscreen(CcPlatform *platform) {
     (void)platform;
@@ -97,10 +103,43 @@ static bool poll_restart_events(CcEvent *event) {
     return true;
 }
 
+static bool poll_recording_events(CcEvent *event) {
+    static const CcKey keys[] = {CC_KEY_UNKNOWN,
+                                 '.',
+                                 '.',
+                                 CC_KEY_UNKNOWN,
+                                 'r',
+                                 CC_KEY_UNKNOWN,
+                                 'r',
+                                 '.',
+                                 '.',
+                                 CC_KEY_UNKNOWN,
+                                 CC_KEY_UNKNOWN,
+                                 CC_KEY_UNKNOWN};
+    unsigned phase = event_phase++;
+    if (phase == sizeof(keys) / sizeof(keys[0])) {
+        assert(drawn_counter == 1 && drawn_frames == 3);
+        recording_clock_failed = recording_fail_clock_on_quit;
+        event->type = CC_EVENT_QUIT;
+        return true;
+    }
+    if (phase >= sizeof(keys) / sizeof(keys[0]) || keys[phase] == CC_KEY_UNKNOWN)
+        return false;
+    bool up = phase == 2 || phase == 6 || phase == 8;
+    *event =
+        (CcEvent){.type = up ? CC_EVENT_KEY_UP : CC_EVENT_KEY_DOWN, .key = keys[phase]};
+    return true;
+}
+
 static int test_clock(clockid_t clock_id, struct timespec *value) {
     (void)clock_id;
-    if (clock_failure)
+    if (clock_failure || recording_clock_failed)
         return -1;
+    if (test_recording_events) {
+        *value = (struct timespec){.tv_sec = event_phase / 8,
+                                   .tv_nsec = (long)(event_phase % 8) * 125000000};
+        return 0;
+    }
     *value = (struct timespec){.tv_sec = event_phase >= 3 ? 1 : 0};
     return 0;
 }
@@ -119,6 +158,8 @@ static bool test_poll(CcPlatform *platform, CcEvent *event) {
         return poll_disc_events(event);
     if (test_restart_events)
         return poll_restart_events(event);
+    if (test_recording_events)
+        return poll_recording_events(event);
     switch (event_phase++) {
         case 0:
         case 3:
@@ -154,6 +195,8 @@ static void test_draw(GcScene *scene, const gc_menu *menu) {
     ++drawn_frames;
     if (test_restart_events)
         assert(menu->page == (drawn_frames >= 3 ? GC_PAGE_STARTUP : GC_PAGE_CUBE));
+    if (test_recording_events)
+        assert(menu->page == GC_PAGE_STARTUP);
     if (test_disc_events) {
         gc_disc_status expected_disc =
             drawn_counter ? GC_DISC_LID_OPEN : GC_DISC_ABSENT;
@@ -290,6 +333,162 @@ static void test_window_controls(void) {
     test_window_events = false;
 }
 
+static uint32_t recording_u32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 |
+           (uint32_t)bytes[2] << 8 | bytes[3];
+}
+
+static uint64_t recording_u64(const uint8_t *bytes) {
+    return (uint64_t)recording_u32(bytes) << 32 | recording_u32(bytes + 4);
+}
+
+static const uint8_t *recording_box(const uint8_t *bytes, size_t size,
+                                    const char type[4]) {
+    size_t offset = 0;
+    while (size - offset >= 8) {
+        uint32_t length = recording_u32(bytes + offset);
+        assert(length >= 8 && length <= size - offset);
+        if (!memcmp(bytes + offset + 4, type, 4))
+            return bytes + offset;
+        offset += length;
+    }
+    return NULL;
+}
+
+static const uint8_t *recording_child(const uint8_t *parent, const char type[4]) {
+    uint32_t length = recording_u32(parent);
+    assert(length >= 8);
+    const uint8_t *child = recording_box(parent + 8, length - 8, type);
+    assert(child);
+    return child;
+}
+
+static void check_recording_file(const char *path, uint64_t duration_ticks,
+                                 bool half_size) {
+    FILE *file = fopen(path, "rb");
+    assert(file && fseek(file, 0, SEEK_END) == 0);
+    long length = ftell(file);
+    assert(length > 48 && fseek(file, 0, SEEK_SET) == 0);
+    uint8_t *bytes = malloc((size_t)length);
+    assert(bytes && fread(bytes, 1, (size_t)length, file) == (size_t)length);
+    assert(fclose(file) == 0);
+    assert(recording_u32(bytes) == 32 && !memcmp(bytes + 4, "ftyp", 4));
+    assert(recording_u32(bytes + 32) == 1 && !memcmp(bytes + 36, "mdat", 4));
+    uint64_t media_size = recording_u64(bytes + 40);
+    assert(media_size >= 16 && media_size <= (uint64_t)length - 40);
+    size_t movie_offset = 32 + (size_t)media_size;
+    const uint8_t *movie = bytes + movie_offset;
+    assert(recording_u32(movie) == (size_t)length - movie_offset &&
+           !memcmp(movie + 4, "moov", 4));
+    const uint8_t *header = recording_child(movie, "mvhd");
+    assert(header[8] == 1 && recording_u32(header + 28) == 1000000 &&
+           recording_u64(header + 32) == duration_ticks);
+    size_t offset = 8;
+    unsigned seen = 0;
+    while (offset < recording_u32(movie)) {
+        const uint8_t *track =
+            recording_box(movie + offset, recording_u32(movie) - offset, "trak");
+        if (!track)
+            break;
+        const uint8_t *media = recording_child(track, "mdia");
+        const uint8_t *media_header = recording_child(media, "mdhd");
+        const uint8_t *handler = recording_child(media, "hdlr");
+        const uint8_t *table = recording_child(recording_child(media, "minf"), "stbl");
+        const uint8_t *sizes = recording_child(table, "stsz");
+        assert(media_header[8] == 1);
+        if (!memcmp(handler + 16, "vide", 4)) {
+            assert(!(seen & 1) && recording_u32(media_header + 28) == 1000000 &&
+                   recording_u64(media_header + 32) == duration_ticks &&
+                   recording_u32(sizes + 16) == 4);
+            const uint8_t *description = recording_child(table, "stsd");
+            assert(recording_u32(description) >= 16 + 86 &&
+                   recording_u32(description + 12) == 1);
+            const uint8_t *entry = description + 16;
+            unsigned width = (unsigned)entry[32] << 8 | entry[33];
+            unsigned height = (unsigned)entry[34] << 8 | entry[35];
+            assert(width == (unsigned)CC_FRAME_WIDTH / (half_size ? 2u : 1u));
+            assert(height == (unsigned)CC_FRAME_HEIGHT / (half_size ? 2u : 1u));
+            seen |= 1;
+        } else {
+            uint64_t audio_frames = duration_ticks * 48000 / 1000000;
+            assert(!(seen & 2) && !memcmp(handler + 16, "soun", 4) &&
+                   recording_u32(media_header + 28) == 48000 &&
+                   recording_u64(media_header + 32) == audio_frames &&
+                   recording_u32(sizes + 12) == 8 &&
+                   recording_u32(sizes + 16) == audio_frames);
+            seen |= 2;
+        }
+        offset = (size_t)(track - movie) + recording_u32(track);
+    }
+    assert(seen == 3);
+    free(bytes);
+}
+
+static void test_actual_recording(const char *ipl_path, const char *region,
+                                  bool fail_clock, bool half_size) {
+    char relative_home[96];
+    bool directory_created = false;
+    for (unsigned attempt = 0; attempt < 1000; ++attempt) {
+        int length =
+            snprintf(relative_home, sizeof(relative_home),
+                     "Files/app-recording-home-%ld-%u", (long)getpid(), attempt);
+        assert(length > 0 && (size_t)length < sizeof(relative_home));
+        if (mkdir(relative_home, 0700) == 0) {
+            directory_created = true;
+            break;
+        }
+        assert(errno == EEXIST);
+    }
+    assert(directory_created);
+    char working_directory[PATH_MAX];
+    assert(getcwd(working_directory, sizeof(working_directory)));
+    char test_home[PATH_MAX];
+    int count = snprintf(test_home, sizeof(test_home), "%s/%s", working_directory,
+                         relative_home);
+    assert(count > 0 && (size_t)count < sizeof(test_home));
+    const char *original_home = getenv("HOME");
+    char *saved_home = original_home ? strdup(original_home) : NULL;
+    assert(!original_home || saved_home);
+    assert(setenv("HOME", test_home, 1) == 0);
+    test_recording_events = true;
+    recording_fail_clock_on_quit = fail_clock;
+    recording_clock_failed = false;
+    event_phase = drawn_frames = 0;
+    drawn_counter = 0;
+    char *arguments[] = {"gamecube-menu", "--ipl",        (char *)ipl_path,
+                         "--region",      (char *)region, "--step",
+                         "--delaystart",  "--record",     "half"};
+    assert(test_application_main(half_size ? 9 : 8, arguments) ==
+           (fail_clock ? EXIT_FAILURE : EXIT_SUCCESS));
+    assert(drawn_counter == 1 && drawn_frames == 3);
+    test_recording_events = false;
+    recording_clock_failed = false;
+    char movies[PATH_MAX];
+    count = snprintf(movies, sizeof(movies), "%s/Movies", test_home);
+    assert(count > 0 && (size_t)count < sizeof(movies));
+    DIR *directory = opendir(movies);
+    assert(directory);
+    char path[PATH_MAX] = {0};
+    struct dirent *entry;
+    while ((entry = readdir(directory))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        assert(!path[0]);
+        size_t name_length = strlen(entry->d_name);
+        assert(name_length > 4 && !strcmp(entry->d_name + name_length - 4, ".mp4"));
+        count = snprintf(path, sizeof(path), "%s/%s", movies, entry->d_name);
+        assert(count > 0 && (size_t)count < sizeof(path));
+    }
+    assert(closedir(directory) == 0 && path[0]);
+    check_recording_file(path, fail_clock ? 1500000 : 1750000, half_size);
+    assert(remove(path) == 0 && rmdir(movies) == 0 && rmdir(test_home) == 0);
+    if (saved_home)
+        assert(setenv("HOME", saved_home, 1) == 0);
+    else
+        assert(unsetenv("HOME") == 0);
+    free(saved_home);
+}
+
 int main(int argc, char **argv) {
     test_window_controls();
     if (argc < 3)
@@ -347,6 +546,10 @@ int main(int argc, char **argv) {
                                  "--delaystart",  "--step"};
     assert(test_application_main(8, restart_arguments) == EXIT_SUCCESS);
     assert(drawn_counter == 1 && drawn_frames == 4);
+    test_restart_events = false;
+    test_actual_recording(argv[1], argv[2], false, false);
+    test_actual_recording(argv[1], argv[2], true, false);
+    test_actual_recording(argv[1], argv[2], false, true);
     gc_card_image imported = {0};
     assert(gc_card_image_load(&imported, "Files/import.raw") == GC_CARD_IMAGE_OK);
     assert(imported.byte_count == original.byte_count &&

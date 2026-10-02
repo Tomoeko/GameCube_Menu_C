@@ -22,6 +22,8 @@ typedef struct {
     bool inspect_frames;
     bool delay_start;
     bool timed_start;
+    bool record;
+    bool record_half;
 } GcAppOptions;
 
 typedef enum {
