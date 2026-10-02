@@ -189,6 +189,7 @@ static bool decode_wave(GcAudioWave *wave, const uint8_t *descriptor,
                              history))
         return false;
     wave->count = sample_count;
+    wave->afc_source = true;
     wave->rate = (unsigned)rate;
     wave->key = descriptor[2];
     wave->loop = cc_read_be32(descriptor + 16) != 0;
@@ -289,15 +290,13 @@ static bool instrument_regions(GcAudioInstrument *instrument, const uint8_t *ban
     return instrument->region_count != 0;
 }
 
-bool gc_audio_envelope_decode_steps(GcAudioEnvelopeStep *steps, unsigned *count,
-                                    const uint8_t *bank, size_t size, size_t offset) {
+static bool decode_envelope_table(GcAudioEnvelopeStep *steps, unsigned *count,
+                                  const uint8_t *data, size_t size, size_t offset) {
     *count = 0;
-    if (!offset)
-        return true;
     for (unsigned i = 0; i < GC_AUDIO_ENVELOPE_STEPS; ++i) {
-        if (!cc_bounds_contains(size, offset + i * 6, 6))
+        if (!cc_bounds_contains(size, offset, 6))
             return false;
-        const uint8_t *entry = bank + offset + i * 6;
+        const uint8_t *entry = data + offset;
         steps[i].curve = cc_read_be16(entry);
         steps[i].ticks = cc_read_be16(entry + 2);
         steps[i].value = (int16_t)cc_read_be16(entry + 4);
@@ -306,8 +305,21 @@ bool gc_audio_envelope_decode_steps(GcAudioEnvelopeStep *steps, unsigned *count,
             return true;
         if (steps[i].curve > 2)
             return false;
+        offset += 6;
     }
     return false;
+}
+
+bool gc_audio_envelope_decode_steps(GcAudioEnvelopeStep *steps, unsigned *count,
+                                    const uint8_t *data, size_t size, size_t offset) {
+    *count = 0;
+    return !offset || decode_envelope_table(steps, count, data, size, offset);
+}
+
+bool gc_audio_envelope_decode_sequence_steps(GcAudioEnvelopeStep *steps,
+                                             unsigned *count, const uint8_t *data,
+                                             size_t size, size_t offset) {
+    return decode_envelope_table(steps, count, data, size, offset);
 }
 
 static bool decode_envelope(GcAudioEnvelope *envelope, const uint8_t *bank, size_t size,
@@ -318,6 +330,13 @@ static bool decode_envelope(GcAudioEnvelope *envelope, const uint8_t *bank, size
         return false;
     const uint8_t *entry = bank + offset;
     envelope->enabled = true;
+    uint32_t attack = cc_read_be32(entry + 8);
+    uint32_t release = cc_read_be32(entry + 12);
+    if (attack > GC_AUDIO_TABLE_OFFSET_MASK || release > GC_AUDIO_TABLE_OFFSET_MASK)
+        return false;
+    envelope->attack_identity = attack ? GC_AUDIO_TABLE_BANK | attack : 0;
+    envelope->release_identity = release ? GC_AUDIO_TABLE_BANK | release : 0;
+    envelope->release_continues = attack && attack == release;
     envelope->target = entry[0];
     envelope->rate = cc_read_be_float(entry + 4);
     envelope->scale = cc_read_be_float(entry + 16);
@@ -459,6 +478,7 @@ bool gc_audio_resources_decode(GcAudio *audio, uint8_t *rom, size_t size) {
     if (!audio->sequence)
         return false;
     memcpy(audio->sequence, rom + sequence_offset, audio->sequence_size);
+    gc_audio_route_table_init(audio);
     return true;
 }
 

@@ -37,6 +37,7 @@ add_library(gamecube_core STATIC
     src/audio/audio.c
     src/audio/audio_dsp.c
     src/audio/audio_envelope.c
+    src/audio/audio_math.c
     src/audio/audio_resources.c
     src/audio/audio_sequence.c
     src/audio/navigation_sound.c
@@ -80,6 +81,17 @@ add_library(gamecube_core STATIC
 target_include_directories(gamecube_core PUBLIC include PRIVATE src)
 target_link_libraries(gamecube_core PUBLIC console_common)
 gc_warnings(gamecube_core)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    # Ordinary recovered audio operations round separately; explicit fmaf
+    # preserves the firmware's single-rounding multiply-add instructions.
+    set_source_files_properties(
+        src/audio/audio_dsp.c
+        src/audio/audio_envelope.c
+        src/audio/audio_math.c
+        src/audio/audio_resources.c
+        src/audio/audio_sequence.c
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
 if(APPLE)
     target_sources(gamecube_core PRIVATE src/platform/apple/audio_apple.c)
     target_link_libraries(gamecube_core PUBLIC "-framework AudioToolbox")
@@ -176,7 +188,8 @@ if(BUILD_TESTING)
     gc_test_directory(gc-tool-output tool-output)
     foreach(source
         app/error_control app/frame_control app/input_control
-        audio/audio audio/navigation_sound
+        audio/audio audio/audio_cycle audio/audio_effect audio/audio_voice
+        audio/navigation_sound
         cards/card_art cards/card_cells cards/card_image cards/card_lighting
         cards/card_operation cards/card_popup cards/card_usage
         disc/disc disc/disc_control disc/launch_control

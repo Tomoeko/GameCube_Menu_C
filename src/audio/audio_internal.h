@@ -12,6 +12,12 @@
 #define GC_AUDIO_SEQUENCE_LIMIT 16384
 #define GC_AUDIO_EVENT_QUEUE 64
 #define GC_AUDIO_ENVELOPE_STEPS 16
+#define GC_AUDIO_OSCILLATORS 4
+#define GC_AUDIO_TABLE_BANK UINT32_C(0x10000000)
+#define GC_AUDIO_TABLE_SEQUENCE UINT32_C(0x20000000)
+#define GC_AUDIO_TABLE_TEMPLATE UINT32_C(0x30000000)
+#define GC_AUDIO_TABLE_LOCAL UINT32_C(0x40000000)
+#define GC_AUDIO_TABLE_OFFSET_MASK UINT32_C(0x0fffffff)
 #define GC_AUDIO_DSP_RATE 32028.5
 #define GC_AUDIO_DSP_QUANTUM 80.0
 #define GC_AUDIO_DSP_PITCH_SCALE 4096.0
@@ -25,10 +31,15 @@ typedef struct {
 
 typedef struct {
     bool enabled;
+    bool release_continues;
+    bool null_release_quick;
+    bool scaled_duration;
     unsigned target;
     float rate;
     float scale;
     float offset;
+    uint32_t attack_identity;
+    uint32_t release_identity;
     unsigned attack_count;
     unsigned release_count;
     GcAudioEnvelopeStep attack[GC_AUDIO_ENVELOPE_STEPS];
@@ -47,6 +58,7 @@ typedef struct {
     bool held;
     bool released;
     bool ended;
+    bool quick_release;
 } GcAudioEnvelopeState;
 
 typedef struct {
@@ -56,6 +68,7 @@ typedef struct {
     unsigned key;
     unsigned id;
     bool loop;
+    bool afc_source;
     size_t loop_start;
     size_t loop_end;
 } GcAudioWave;
@@ -116,6 +129,7 @@ typedef struct {
     unsigned time_mode;
     uint16_t routes[6];
     GcAudioEnvelope envelopes[2];
+    uint8_t envelope_modes[2];
     float parameters[17];
     float parameter_targets[17];
     float parameter_steps[17];
@@ -130,20 +144,21 @@ typedef struct {
     double position;
     double step;
     double base_step;
-    float gain;
     float base_gain;
+    float track_gain;
     float pan;
-    float left_scale;
-    float right_scale;
     float reverb;
     unsigned buses[6];
-    float bus_scales[6];
     unsigned duration;
-    GcAudioEnvelopeState envelopes[2];
+    GcAudioEnvelopeState envelopes[GC_AUDIO_OSCILLATORS];
+    uint8_t envelope_tracks[GC_AUDIO_OSCILLATORS];
     float envelope_volume;
     float envelope_pitch;
     float envelope_pan;
     bool released;
+    bool block_started;
+    bool end_pending;
+    double block_pitch;
     GcAudioDspGain dsp_gains[6];
 } GcAudioVoice;
 
@@ -180,11 +195,13 @@ struct GcAudio {
     uint16_t output_gain;
     float semitone_ratios[128];
     float fractional_semitone_ratios[64];
+    float route_sine_table[257];
     int16_t resampling_coefficients[64][4];
     double output_fraction;
     float output_previous[2];
     float output_next[2];
     bool output_ready;
+    bool render_mono;
     GcAudioEffect effects[4];
     int16_t chorus[160];
     uint32_t chorus_read;
@@ -217,6 +234,7 @@ bool gc_audio_resources_decode(GcAudio *audio, uint8_t *rom, size_t size);
 bool gc_audio_resources_load(GcAudio *audio, const char *ipl_path);
 void gc_audio_resources_release(GcAudio *audio);
 void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]);
+void gc_audio_dsp_voice_begin(GcAudio *audio, GcAudioVoice *voice, bool mono);
 
 void gc_audio_sequence_init(GcAudio *audio);
 void gc_audio_sequence_tick(GcAudio *audio);
@@ -228,9 +246,14 @@ void gc_audio_envelope_start(GcAudioEnvelopeState *state,
 void gc_audio_envelope_release(GcAudioEnvelopeState *state);
 float gc_audio_envelope_step(GcAudioEnvelopeState *state);
 void gc_audio_voice_envelopes(GcAudioVoice *voice);
+void gc_audio_voice_envelope_install(GcAudioVoice *voice, unsigned slot,
+                                     const GcAudioEnvelope *envelope);
 void gc_audio_sequence_envelopes(GcAudio *audio, GcAudioVoice *voice);
 bool gc_audio_envelope_decode_steps(GcAudioEnvelopeStep *steps, unsigned *count,
                                     const uint8_t *data, size_t size, size_t offset);
+bool gc_audio_envelope_decode_sequence_steps(GcAudioEnvelopeStep *steps,
+                                             unsigned *count, const uint8_t *data,
+                                             size_t size, size_t offset);
 int16_t gc_audio_resample(const GcAudio *audio, const GcAudioWave *wave,
                           double position);
 int16_t gc_audio_resample_pitch(const GcAudio *audio, const GcAudioWave *wave,
@@ -247,6 +270,10 @@ void gc_audio_effects_end(GcAudio *audio, int16_t buses[12]);
 int16_t gc_audio_dsp_output(const GcAudio *audio, int16_t sample);
 float gc_audio_route_scale(const GcAudio *audio, const GcAudioVoice *voice,
                            unsigned route, bool mono);
+void gc_audio_route_table_init(GcAudio *audio);
+float gc_audio_route_sine(const GcAudio *audio, float value);
+float gc_audio_route_gain(const GcAudio *audio, const GcAudioVoice *voice,
+                          unsigned route, bool mono);
 float gc_audio_pitch_ratio(const GcAudio *audio, float semitones);
 float gc_audio_bus_gain(const GcAudio *audio, float gain);
 

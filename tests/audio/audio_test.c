@@ -148,6 +148,31 @@ static void test_native_resampling(void) {
     free(audio);
 }
 
+static void test_regional_route_angles(void) {
+    GcAudio *audio = calloc(1, sizeof(*audio));
+    assert(audio);
+    const float parameters[5] = {0, 0.25f, 0.5f, 0.75f, 1};
+    /* Results of the recovered finite-angle instruction sequence. */
+    const float expected[2][5] = {
+        {0, 0x1.87db0ep-2f, 0x1.6a0786p-1f, 0x1.d904cep-1f, 1},
+        {0, 0x1.87de2cp-2f, 0x1.6a09e8p-1f, 0x1.d906bep-1f, 1},
+    };
+    for (unsigned revision = 0; revision < 2; ++revision) {
+        audio->sequence_revision = revision;
+        gc_audio_route_table_init(audio);
+        for (unsigned index = 0; index < 5; ++index)
+            assert(gc_audio_route_sine(audio, parameters[index]) ==
+                   expected[revision][index]);
+        assert(gc_audio_route_sine(audio, -1) == 0);
+        assert(gc_audio_route_sine(audio, 2) == 1);
+        assert(gc_audio_route_sine(audio, NAN) == 0);
+    }
+    /* EUR truncates at table boundaries rather than interpolating entries. */
+    assert(gc_audio_route_sine(audio, nextafterf(0.25f, 0)) == 0x1.820e3ep-2f);
+    assert(gc_audio_route_sine(audio, nextafterf(0.25f, 1)) == 0x1.87de2cp-2f);
+    free(audio);
+}
+
 static void test_native_mixer_routes_and_delays(void) {
     GcAudio *audio = calloc(1, sizeof(*audio));
     assert(audio);
@@ -160,11 +185,12 @@ static void test_native_mixer_routes_and_delays(void) {
     voice.buses[2] = 3;
     assert(gc_audio_route_scale(audio, &voice, 0, false) == 1);
     assert(gc_audio_route_scale(audio, &voice, 1, false) == 0);
-    assert(fabsf(gc_audio_route_scale(audio, &voice, 2, false) - 0.7071067811865475f) <
-           0.00001f);
+    /* The USA finite-angle routine uses its recovered approximate pi value. */
+    assert(gc_audio_route_scale(audio, &voice, 2, false) == 0x1.6a0786p-1f);
     assert(fabsf(gc_audio_route_scale(audio, &voice, 0, true) -
                  gc_audio_route_scale(audio, &voice, 1, true)) < 0.00001f);
     audio->sequence_revision = 1;
+    gc_audio_route_table_init(audio);
     voice.pan = 0.25f;
     audio->tracks[0].routes[0] = 0x150;
     audio->tracks[0].routes[1] = 0x210;
@@ -187,7 +213,7 @@ static void test_native_mixer_routes_and_delays(void) {
     echo->length = 3;
     echo->return_bus[0] = 2;
     echo->return_gain[0] = INT16_MAX;
-    for (unsigned frame = 0; frame <= 10; ++frame) {
+    for (unsigned frame = 0; frame <= 11; ++frame) {
         int16_t buses[12] = {0};
         gc_audio_effects_begin(audio, buses);
         if (!frame)
@@ -195,7 +221,7 @@ static void test_native_mixer_routes_and_delays(void) {
         gc_audio_effects_end(audio, buses);
         int16_t left = frame == 5 ? 8000 : frame == 10 ? 4000 : 0;
         assert(buses[1] == left);
-        assert(buses[2] == (frame == 3 ? 15999 : -1));
+        assert(buses[2] == (frame == 11 ? 15999 : -1));
     }
     memset(audio, 0, sizeof(*audio));
     audio->sequence_revision = 1;
@@ -236,6 +262,16 @@ static void test_native_master_and_output(void) {
     audio->output_gain = 4097;
     assert(gc_audio_dsp_output(audio, 1) == 1);
     assert(gc_audio_dsp_output(audio, -1) == -2);
+    audio->master_gain = UINT16_MAX;
+    GcAudioVoice voice = {
+        .active = true, .base_gain = 1, .track_gain = 1, .envelope_volume = 1};
+    voice.buses[0] = 1;
+    audio->tracks[0].routes[0] = 0x10;
+    gc_audio_dsp_voice_begin(audio, &voice, false);
+    /* The DSP field stores the low word, including master values above
+     * INT16_MAX; a float-to-int16 conversion would be undefined here.
+     */
+    assert(voice.dsp_gains[0].current == -1);
     free(audio);
 }
 
@@ -397,9 +433,9 @@ static void test_native_dsp_sequence_boundaries(void) {
     gc_audio_sequence_init(audio);
     float stereo[2];
     /* At 120*48/25200, the first sequence tick is the fifth DSP update.
-     * The output adapter primes two samples, hence native sample398 below.
+     * The output adapter primes two samples, hence host sample399 below.
      */
-    for (unsigned sample = 0; sample < 398; ++sample) {
+    for (unsigned sample = 0; sample < 399; ++sample) {
         gc_audio_render(audio, stereo, 1);
         assert(audio->sequence_ticks == 0);
     }
@@ -760,6 +796,7 @@ int main(int argc, char **argv) {
     test_native_track_register_inheritance();
     test_native_cube_modulation();
     test_native_resampling();
+    test_regional_route_angles();
     test_native_mixer_routes_and_delays();
     test_native_master_and_output();
     test_native_dsp_gain_ramps();

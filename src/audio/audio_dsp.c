@@ -24,6 +24,15 @@ float gc_audio_pitch_ratio(const GcAudio *audio, float semitones) {
     return audio->semitone_ratios[index] * audio->fractional_semitone_ratios[fraction];
 }
 
+static size_t source_end(const GcAudioWave *wave) {
+    if (wave->loop)
+        return wave->loop_end;
+    /* USA 0x0837 and EUR 0x0925 count complete sixteen-sample AFC frames.
+     * Authored decoded-wave fixtures retain their explicit sample count.
+     */
+    return wave->afc_source ? wave->count / 16 * 16 : wave->count;
+}
+
 static int16_t history_sample(const GcAudioWave *wave, size_t index, unsigned back) {
     if (index < back)
         return 0;
@@ -31,7 +40,7 @@ static int16_t history_sample(const GcAudioWave *wave, size_t index, unsigned ba
     if (wave->loop && sample >= wave->loop_end && wave->loop_start < wave->loop_end)
         sample = wave->loop_start +
                  (sample - wave->loop_start) % (wave->loop_end - wave->loop_start);
-    return sample < wave->count ? wave->samples[sample] : 0;
+    return sample < source_end(wave) ? wave->samples[sample] : 0;
 }
 
 int16_t gc_audio_resample(const GcAudio *audio, const GcAudioWave *wave,
@@ -87,6 +96,9 @@ int64_t gc_audio_dsp_shift(int64_t value, unsigned bits) {
 }
 
 int64_t gc_audio_dsp_round(int64_t value, unsigned bits) {
+    /* MOVPZ/MULMVZ ties-to-even remains an interpretation without hardware
+     * test vectors; instruction-model agreement does not verify that rule.
+     */
     int64_t divisor = INT64_C(1) << bits;
     int64_t middle = value / divisor;
     int64_t remainder = value % divisor;
@@ -110,7 +122,7 @@ int16_t gc_audio_dsp_wrap(int64_t sample) {
 
 void gc_audio_dsp_gain_prepare(GcAudioDspGain *gain, int16_t target, bool revised) {
     if (!gain->initialized) {
-        /* USA 0x813527e0 and EUR 0x81350980 initialize both fields directly. */
+        /* USA 0x813527e0 and EUR 0x81350980 initialize the current gain. */
         gain->current = target;
         gain->initialized = true;
     }
@@ -156,29 +168,48 @@ int16_t gc_audio_dsp_gain_mix(GcAudioDspGain *gain, int16_t sample, int16_t bus,
 }
 
 static void prepare_voice_gains(GcAudio *audio, GcAudioVoice *voice, bool mono) {
-    float gain = voice->gain * voice->envelope_volume;
     for (unsigned route = 0; route < 6; ++route) {
-        float scale = mono ? gc_audio_route_scale(audio, voice, route, true)
-                           : voice->bus_scales[route];
-        int16_t target = (int16_t)(gc_audio_bus_gain(audio, gain * scale) * 65536);
+        float gain = gc_audio_route_gain(audio, voice, route, mono);
+        int64_t multiplier = (int64_t)(gc_audio_bus_gain(audio, gain) * 65536);
+        int16_t target = gc_audio_dsp_wrap(multiplier);
         gc_audio_dsp_gain_prepare(&voice->dsp_gains[route], target,
                                   audio->sequence_revision != 0);
+    }
+}
+
+void gc_audio_dsp_voice_begin(GcAudio *audio, GcAudioVoice *voice, bool mono) {
+    /* Physical setup stores the first oscillator value before that update's
+     * physical callback advances it and schedules the first gain ramp.
+     */
+    if (voice->active)
+        prepare_voice_gains(audio, voice, mono);
+}
+
+static void begin_voice_block(const GcAudioWave *wave, GcAudioVoice *voice) {
+    double pitch = (float)((float)voice->step * voice->envelope_pitch);
+    pitch = floor(fmax(0, fmin(65535, pitch * GC_AUDIO_DSP_PITCH_SCALE))) /
+            GC_AUDIO_DSP_PITCH_SCALE;
+    voice->block_pitch = pitch;
+    voice->block_started = true;
+    if (!wave->loop) {
+        double end = (double)source_end(wave);
+        double next = voice->position + GC_AUDIO_DSP_QUANTUM * pitch;
+        /* Exhaustion zero-fills the requested input but completes this whole
+         * output block. Exact consumption reaches the exhausted-buffer path
+         * on the following block, preserving its interpolation history.
+         */
+        voice->end_pending = floor(voice->position) >= end || floor(next) > end;
     }
 }
 
 static void render_voice(GcAudio *audio, GcAudioVoice *voice, bool mono,
                          int16_t buses[12]) {
     GcAudioWave *wave = &audio->waves[voice->wave];
-    size_t end = wave->loop ? wave->loop_end : wave->count;
-    if (!wave->loop && voice->position >= (double)end) {
-        voice->active = false;
-        return;
-    }
+    if (!voice->block_started)
+        begin_voice_block(wave, voice);
     if (!voice->dsp_gains[0].initialized)
         prepare_voice_gains(audio, voice, mono);
-    double pitch = (float)((float)voice->step * voice->envelope_pitch);
-    pitch = floor(fmax(0, fmin(65535, pitch * GC_AUDIO_DSP_PITCH_SCALE))) /
-            GC_AUDIO_DSP_PITCH_SCALE;
+    double pitch = voice->block_pitch;
     int16_t sample = gc_audio_resample_pitch(audio, wave, voice->position, pitch);
     for (unsigned route = 0; route < 6; ++route) {
         unsigned bus = voice->buses[route];
@@ -221,9 +252,12 @@ void gc_audio_effects_begin(GcAudio *audio, int16_t buses[12]) {
          * rounds MOVPZ, and stores its middle word in SET16.
          */
         int16_t filtered = gc_audio_dsp_wrap(gc_audio_dsp_round(product, 15));
+        /* Mode 2 returns before FIR from the bus base, eight words before
+         * the new DMA samples. Its oldest retained input is returned.
+         */
+        int16_t returned = effect->mode == 1 ? filtered : effect->history[0];
         memmove(effect->history, effect->history + 1, 7 * sizeof(effect->history[0]));
         effect->history[7] = delayed;
-        int16_t returned = effect->mode == 1 ? filtered : delayed;
         for (unsigned channel = 0; channel < 2; ++channel) {
             unsigned bus = effect->return_bus[channel];
             if (bus)
@@ -267,6 +301,12 @@ void gc_audio_effects_end(GcAudio *audio, int16_t buses[12]) {
         uint32_t step = audio->chorus_direction < 0 ? 65536u - 512u : 65536u + 512u;
         audio->chorus_read = (audio->chorus_read + step) % (160u * 65536u);
         if (++audio->chorus_frame == 80) {
+            /* SET16 preserves the fractional step when the original routine
+             * loads the ring base and subtracts it before saving this cursor.
+             */
+            audio->chorus_read =
+                (audio->chorus_read + 160u * 65536u - (step & 65535u)) %
+                (160u * 65536u);
             audio->chorus_frame = 0;
             audio->chorus_write = audio->chorus_write ? 0 : 80;
         }
@@ -286,18 +326,29 @@ int16_t gc_audio_dsp_output(const GcAudio *audio, int16_t sample) {
 }
 
 void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]) {
+    audio->render_mono = mono;
     /* sub_8134fa20 schedules seven DSP updates per 560-sample buffer at
      * the native DAC rate. USA/JAP sub_813571a0 uses tempo*timebase/25200
      * per update; EUR sub_813554c0 derives it from the actual DAC rate.
      * sub_8134fc20 runs the sequence callback before channel oscillators.
      * Notes and parameter changes occur at those 80-sample boundaries.
      */
-    if (++audio->update_samples == (unsigned)GC_AUDIO_DSP_QUANTUM) {
+    if (audio->dsp_frame == 0) {
+        for (unsigned index = 0; index < GC_AUDIO_VOICES; ++index) {
+            GcAudioVoice *voice = &audio->voices[index];
+            voice->block_started = false;
+        }
+    }
+    if (audio->update_samples == (unsigned)GC_AUDIO_DSP_QUANTUM) {
         audio->update_samples = 0;
-        float tick_step = (float)(audio->tempo * audio->timebase);
-        tick_step = audio->sequence_revision ? tick_step * (float)GC_AUDIO_DSP_QUANTUM /
-                                                   (60.0f * (float)GC_AUDIO_DSP_RATE)
-                                             : tick_step / 25200.0f;
+        float tick_step = (float)audio->tempo * (float)audio->timebase;
+        if (audio->sequence_revision) {
+            float divisor = 60.0f * (float)GC_AUDIO_DSP_RATE;
+            divisor /= (float)GC_AUDIO_DSP_QUANTUM;
+            tick_step /= divisor;
+        } else {
+            tick_step /= 25200.0f;
+        }
         audio->tick_fraction = (float)((float)audio->tick_fraction + tick_step);
         while (audio->tick_fraction >= 1) {
             audio->tick_fraction = (float)((float)audio->tick_fraction - 1.0f);
@@ -305,6 +356,11 @@ void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]) {
         }
         for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
             GcAudioVoice *voice = &audio->voices[i];
+            /* 0x8134fc20 invokes sequence callbacks before 0x81352640
+             * retires channels whose preceding DSP block marked them ended.
+             */
+            if (voice->end_pending)
+                voice->active = false;
             if (voice->active && !voice->released && voice->duration != UINT32_MAX &&
                 (!voice->duration || !--voice->duration))
                 gc_audio_voice_release(voice);
@@ -323,4 +379,5 @@ void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]) {
     gc_audio_effects_end(audio, buses);
     output[0] = (float)gc_audio_dsp_output(audio, buses[1]) / 32768;
     output[1] = (float)gc_audio_dsp_output(audio, buses[2]) / 32768;
+    ++audio->update_samples;
 }
