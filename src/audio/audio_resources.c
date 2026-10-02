@@ -190,7 +190,7 @@ static bool decode_wave(GcAudioWave *wave, const uint8_t *descriptor,
         return false;
     wave->count = sample_count;
     wave->afc_source = true;
-    wave->rate = (unsigned)rate;
+    wave->rate = rate;
     wave->key = descriptor[2];
     wave->loop = cc_read_be32(descriptor + 16) != 0;
     wave->loop_start = cc_read_be32(descriptor + 20);
@@ -418,9 +418,14 @@ static bool decode_effects(GcAudio *audio, const uint8_t *rom) {
                 if (native_bus > 11)
                     return false;
                 unsigned bus = native_bus < 11 ? native_bus + 1 : 0;
+                int16_t gain = (int16_t)cc_read_be16(descriptor + 4 + channel * 4);
+                /* Native returns into delay buses require the whole block's
+                 * DMA/FIR ordering. The supplied descriptors never use them.
+                 */
+                if (gain && bus >= 3 && bus <= 6)
+                    return false;
                 effect->return_bus[channel] = bus;
-                effect->return_gain[channel] =
-                    (int16_t)cc_read_be16(descriptor + 4 + channel * 4);
+                effect->return_gain[channel] = gain;
             }
             for (unsigned tap = 0; tap < 8; ++tap)
                 effect->filter[tap] = (int16_t)cc_read_be16(descriptor + 16 + tap * 2);

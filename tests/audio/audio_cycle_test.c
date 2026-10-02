@@ -113,8 +113,9 @@ static void test_distinct_release_table(void) {
         (void)gc_audio_envelope_step(&state);
     float current = state.current;
     gc_audio_envelope_release(&state);
-    assert(state.pc == 0 && state.remaining == 0 && state.target == current);
+    assert(state.release_pending);
     assert(gc_audio_envelope_step(&state) == current);
+    assert(!state.release_pending && state.pc == 1 && state.remaining == 10);
     for (unsigned tick = 0; tick < 10; ++tick)
         (void)gc_audio_envelope_step(&state);
     assert(state.ended);
@@ -150,8 +151,8 @@ static void test_cycle_release_replacement(unsigned revision) {
         GcAudioVoice *voice = &audio->voices[0];
         for (unsigned tick = 0; tick < 5; ++tick)
             gc_audio_voice_envelopes(voice);
-        gc_audio_voice_release(voice);
-        assert(voice->envelopes[0].pc == 0);
+        gc_audio_voice_release(audio, voice);
+        assert(voice->envelopes[0].release_pending);
         for (unsigned tick = 0; tick < 3; ++tick) {
             gc_audio_voice_envelopes(voice);
             assert(voice->active);
@@ -202,8 +203,9 @@ static void test_sequence_table_identity(unsigned revision, unsigned attack_offs
             (void)gc_audio_envelope_step(&state);
         float current = state.current;
         gc_audio_envelope_release(&state);
-        assert(state.pc == 0 && state.remaining == 0 && state.target == current);
+        assert(state.release_pending);
         assert(gc_audio_envelope_step(&state) == current);
+        assert(!state.release_pending);
     }
     GcAudioEnvelopeStep ignored[GC_AUDIO_ENVELOPE_STEPS];
     unsigned count;

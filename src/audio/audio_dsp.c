@@ -320,9 +320,11 @@ void gc_audio_effects_end(GcAudio *audio, int16_t buses[12]) {
 }
 
 int16_t gc_audio_dsp_output(const GcAudio *audio, int16_t sample) {
-    /* M0 product, ASRNRX with +4, SET40 middle-word store: Q12 floor. */
-    return gc_audio_dsp_saturate(
-        gc_audio_dsp_shift((int64_t)sample * audio->output_gain, 12));
+    /* USA 0x012c / EUR 0x0132 loads the output word into signed AX1.h.
+     * M0 product, ASRNRX with +4, SET40 middle-word store: Q12 floor.
+     */
+    int16_t gain = gc_audio_dsp_wrap(audio->output_gain);
+    return gc_audio_dsp_saturate(gc_audio_dsp_shift((int64_t)sample * gain, 12));
 }
 
 void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]) {
@@ -361,11 +363,15 @@ void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]) {
              */
             if (voice->end_pending)
                 voice->active = false;
-            if (voice->active && !voice->released && voice->duration != UINT32_MAX &&
-                (!voice->duration || !--voice->duration))
-                gc_audio_voice_release(voice);
             if (voice->active) {
+                /* Native scalar evaluation precedes gate expiry. Its release
+                 * table first advances at the next physical update.
+                 */
                 gc_audio_sequence_envelopes(audio, voice);
+                if (voice->active && !voice->released &&
+                    voice->duration != UINT32_MAX &&
+                    (!voice->duration || !--voice->duration))
+                    gc_audio_voice_release(audio, voice);
                 prepare_voice_gains(audio, voice, mono);
             }
         }

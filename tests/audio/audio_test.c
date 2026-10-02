@@ -177,9 +177,9 @@ static void test_native_mixer_routes_and_delays(void) {
     GcAudio *audio = calloc(1, sizeof(*audio));
     assert(audio);
     GcAudioVoice voice = {.track = 0, .pan = 0, .reverb = 0.5f};
-    audio->tracks[0].routes[0] = 0x14;
-    audio->tracks[0].routes[1] = 0x24;
-    audio->tracks[0].routes[2] = 0x36;
+    voice.routes[0] = 0x14;
+    voice.routes[1] = 0x24;
+    voice.routes[2] = 0x36;
     voice.buses[0] = 1;
     voice.buses[1] = 2;
     voice.buses[2] = 3;
@@ -192,9 +192,9 @@ static void test_native_mixer_routes_and_delays(void) {
     audio->sequence_revision = 1;
     gc_audio_route_table_init(audio);
     voice.pan = 0.25f;
-    audio->tracks[0].routes[0] = 0x150;
-    audio->tracks[0].routes[1] = 0x210;
-    audio->tracks[0].routes[2] = 0x352;
+    voice.routes[0] = 0x150;
+    voice.routes[1] = 0x210;
+    voice.routes[2] = 0x352;
     assert(fabsf(gc_audio_route_scale(audio, &voice, 0, false) -
                  sinf(0.75f * 1.5707963267948966f)) < 0.00001f);
     assert(fabsf(gc_audio_route_scale(audio, &voice, 1, false) -
@@ -266,7 +266,7 @@ static void test_native_master_and_output(void) {
     GcAudioVoice voice = {
         .active = true, .base_gain = 1, .track_gain = 1, .envelope_volume = 1};
     voice.buses[0] = 1;
-    audio->tracks[0].routes[0] = 0x10;
+    voice.routes[0] = 0x10;
     gc_audio_dsp_voice_begin(audio, &voice, false);
     /* The DSP field stores the low word, including master values above
      * INT16_MAX; a float-to-int16 conversion would be undefined here.

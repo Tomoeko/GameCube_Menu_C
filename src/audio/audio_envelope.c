@@ -13,17 +13,21 @@ void gc_audio_envelope_start(GcAudioEnvelopeState *state,
         state->current = 1;
 }
 
-void gc_audio_envelope_release(GcAudioEnvelopeState *state) {
-    if (state->released)
-        return;
+bool gc_audio_envelope_release(GcAudioEnvelopeState *state) {
+    if (!state->envelope.enabled || state->ended || state->quick_pending ||
+        state->forced_release)
+        return false;
     state->released = true;
-    state->held = false;
-    state->ended = false;
-    if (state->envelope.release_continues)
-        return;
-    state->pc = 0;
-    state->remaining = 0;
-    state->target = state->current;
+    state->release_pending = true;
+    return true;
+}
+
+bool gc_audio_envelope_quick_release(GcAudioEnvelopeState *state) {
+    if (!state->envelope.enabled || state->ended || state->quick_pending ||
+        state->forced_release)
+        return false;
+    state->quick_pending = true;
+    return true;
 }
 
 static float envelope_curve(float value, unsigned curve) {
@@ -46,14 +50,47 @@ float gc_audio_envelope_step(GcAudioEnvelopeState *state) {
     const GcAudioEnvelope *envelope = &state->envelope;
     if (!envelope->enabled)
         return 1;
+    bool normal_restart = state->release_pending && !state->quick_pending;
+    if (state->quick_pending) {
+        /* E9 selects a fixed five-unit table and rate one. USA retains its
+         * interpolation when attack/release pointers match; EUR resets it.
+         * This differs from EUR's normal null-table sixteen-unit release.
+         */
+        state->quick_pending = false;
+        state->quick_release = true;
+        state->forced_release = true;
+        state->released = true;
+        state->release_pending = false;
+        state->held = false;
+        if (envelope->null_release_quick || !envelope->release_continues) {
+            state->pc = 0;
+            state->remaining = 0;
+            state->target = state->current;
+        }
+    }
+    if (state->release_pending) {
+        /* The physical callback marks release before the next oscillator
+         * step reads its live descriptor and compares table identities.
+         */
+        state->release_pending = false;
+        state->held = false;
+        state->ended = false;
+        if (!envelope->release_continues) {
+            state->pc = 0;
+            state->remaining = 0;
+            state->target = state->current;
+        }
+    }
     if (state->ended)
         return envelope->offset;
     if (state->held)
         return fmaf(state->current, envelope->scale, envelope->offset);
-    if (state->released && !envelope->release_count && envelope->null_release_quick &&
-        !state->quick_release) {
+    if (state->released && !state->forced_release && envelope->null_release_quick &&
+        (!envelope->release_count || state->quick_release) &&
+        (!state->quick_release || normal_restart)) {
         /* A present oscillator with a null release table receives the native
-         * sixteen-unit quick release. It still advances at its own rate.
+         * sixteen-unit custom release. That duration survives later normal
+         * callbacks even if the live table changes; E9 still overrides it.
          */
         state->quick_release = true;
         state->curve = 0;
@@ -62,7 +99,7 @@ float gc_audio_envelope_step(GcAudioEnvelopeState *state) {
         state->target = 0;
         state->step = (state->target - state->current) / state->length;
     }
-    if (state->quick_release) {
+    if (state->quick_release && !state->forced_release) {
         state->remaining -= envelope->rate;
         if (state->remaining <= 0) {
             state->current = 0;
@@ -72,14 +109,18 @@ float gc_audio_envelope_step(GcAudioEnvelopeState *state) {
         state->current = fmaf(-state->step, state->remaining, state->target);
         return fmaf(state->current, envelope->scale, envelope->offset);
     }
-    const GcAudioEnvelopeStep *steps =
-        state->released ? envelope->release : envelope->attack;
-    unsigned count = state->released ? envelope->release_count : envelope->attack_count;
+    static const GcAudioEnvelopeStep forced_steps[] = {{0, 5, 0}, {15, 0, 0}};
+    const GcAudioEnvelopeStep *steps = state->forced_release ? forced_steps
+                                       : state->released     ? envelope->release
+                                                             : envelope->attack;
+    unsigned count = state->forced_release ? 2
+                     : state->released     ? envelope->release_count
+                                           : envelope->attack_count;
     if (!count) {
         state->current = 1;
         return 1;
     }
-    state->remaining -= envelope->rate;
+    state->remaining -= state->forced_release ? 1 : envelope->rate;
     for (unsigned command = 0; state->remaining <= 0; ++command) {
         if (state->pc >= count || command >= GC_AUDIO_ENVELOPE_STEPS * 2) {
             state->ended = true;

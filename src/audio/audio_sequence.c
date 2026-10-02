@@ -8,6 +8,7 @@
  * register, child track, table lookup, and instruction dispatch.
  */
 #define NO_TRACK GC_AUDIO_TRACKS
+#define NO_VOICE GC_AUDIO_VOICES
 
 static uint32_t read_bytes(GcAudio *audio, GcAudioTrack *track, unsigned count) {
     if (track->pc > audio->sequence_size || count > audio->sequence_size - track->pc) {
@@ -90,24 +91,116 @@ static bool condition(const GcAudioTrack *track, unsigned mode) {
     }
 }
 
-void gc_audio_voice_release(GcAudioVoice *voice) {
-    if (!voice->released) {
-        voice->released = true;
-        for (unsigned i = 0; i < 2; ++i)
-            gc_audio_envelope_release(&voice->envelopes[i]);
+static const GcAudioEnvelope *voice_envelope_descriptor(const GcAudio *audio,
+                                                        const GcAudioVoice *voice,
+                                                        unsigned oscillator) {
+    unsigned origin = voice->envelope_tracks[oscillator];
+    if (origin < 2 && voice->track < GC_AUDIO_TRACKS)
+        return &audio->tracks[voice->track].envelopes[origin];
+    return &voice->envelopes[oscillator].envelope;
+}
+
+void gc_audio_voice_release(GcAudio *audio, GcAudioVoice *voice) {
+    if (!voice->active)
+        return;
+    voice->released = true;
+    for (unsigned i = 0; i < 2; ++i) {
+        GcAudioEnvelopeState *state = &voice->envelopes[i];
+        if (!state->envelope.enabled)
+            continue;
+        const GcAudioEnvelope *descriptor = voice_envelope_descriptor(audio, voice, i);
+        /* USA 0x81358640 checks the live release pointer before marking the
+         * oscillator; EUR 0x8135a080 also releases null-table oscillators.
+         * A later D7 still takes effect when the pending release advances.
+         */
+        if ((audio->sequence_revision || descriptor->release_identity) &&
+            gc_audio_envelope_release(state))
+            voice->on_release_list = true;
     }
+}
+
+static void quick_release_voice(GcAudio *audio, GcAudioVoice *voice) {
+    for (unsigned i = 0; i < 2; ++i) {
+        const GcAudioEnvelope *descriptor = voice_envelope_descriptor(audio, voice, i);
+        if (audio->sequence_revision || descriptor->release_identity)
+            gc_audio_envelope_quick_release(&voice->envelopes[i]);
+    }
+}
+
+static GcAudioVoice *current_note_voice(GcAudio *audio, unsigned index, unsigned slot) {
+    if (slot >= GC_AUDIO_NOTE_SLOTS)
+        return NULL;
+    unsigned voice_index = audio->tracks[index].note_voices[slot];
+    if (voice_index >= GC_AUDIO_VOICES)
+        return NULL;
+    GcAudioVoice *voice = &audio->voices[voice_index];
+    return voice->active && voice->track == index && voice->slot == slot ? voice : NULL;
+}
+
+static void note_off(GcAudio *audio, unsigned index, unsigned slot) {
+    if (slot >= GC_AUDIO_NOTE_SLOTS)
+        return;
+    GcAudioVoice *voice = current_note_voice(audio, index, slot);
+    if (voice)
+        gc_audio_voice_release(audio, voice);
+    audio->tracks[index].note_voices[slot] = NO_VOICE;
+}
+
+static unsigned allocate_track(GcAudio *audio) {
+    if (!audio->sequence_revision) {
+        for (unsigned index = 1; index < GC_AUDIO_TRACKS; ++index) {
+            if (!audio->tracks[index].active)
+                return index;
+        }
+        return NO_TRACK;
+    }
+    if (!audio->free_track_count)
+        return NO_TRACK;
+    unsigned index = audio->free_tracks[audio->free_track_read];
+    audio->free_track_read = (audio->free_track_read + 1) % GC_AUDIO_CHILD_TRACKS;
+    --audio->free_track_count;
+    audio->track_available[index - 1] = false;
+    return index;
+}
+
+static void recycle_track(GcAudio *audio, unsigned index) {
+    if (!audio->sequence_revision || !index || audio->track_available[index - 1] ||
+        audio->free_track_count == GC_AUDIO_CHILD_TRACKS)
+        return;
+    audio->free_tracks[audio->free_track_write] = index;
+    audio->free_track_write = (audio->free_track_write + 1) % GC_AUDIO_CHILD_TRACKS;
+    ++audio->free_track_count;
+    audio->track_available[index - 1] = true;
 }
 
 static void stop_track(GcAudio *audio, unsigned index) {
     if (index >= GC_AUDIO_TRACKS)
         return;
     GcAudioTrack *track = &audio->tracks[index];
+    for (unsigned slot = 0; slot < GC_AUDIO_NOTE_SLOTS; ++slot)
+        note_off(audio, index, slot);
+    track->clear_note_on_wait = false;
     track->active = false;
+    /* EUR 0x813589a0 enqueues the parent before its children. The IPL root
+     * lives outside the 256-child pool and is never enqueued here.
+     */
+    recycle_track(audio, index);
     for (unsigned slot = 0; slot < 16; ++slot) {
         unsigned child = track->children[slot];
         track->children[slot] = NO_TRACK;
         if (child < GC_AUDIO_TRACKS && audio->tracks[child].parent == index)
             stop_track(audio, child);
+    }
+    for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
+        GcAudioVoice *voice = &audio->voices[i];
+        if (voice->active && voice->owner_track == index) {
+            /* Teardown migrates both native voice lists without releasing
+             * their old tails again. Descriptor pointers retain their source
+             * storage while cached base controls remain frozen.
+             */
+            voice->owner_track = track->parent;
+            voice->detached = true;
+        }
     }
     /* sub_81355340 clears a finished child's owning slot after native
      * sub_81357ce0 tears it down. Reused storage must have exactly one
@@ -120,44 +213,57 @@ static void stop_track(GcAudio *audio, unsigned index) {
                 parent->children[slot] = NO_TRACK;
         }
     }
-    for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
-        if (audio->voices[i].active && audio->voices[i].track == index)
-            gc_audio_voice_release(&audio->voices[i]);
-    }
 }
 
 static void initialize_track(GcAudio *audio, unsigned index, unsigned parent,
                              unsigned flags, size_t pc) {
     GcAudioTrack *track = &audio->tracks[index];
+    GcAudioEnvelope retained_envelopes[2];
+    memcpy(retained_envelopes, track->envelopes, sizeof(retained_envelopes));
+    GcAudioLocalEnvelopeTables retained_tables = track->local_envelope_tables;
     memset(track, 0, sizeof(*track));
+    memcpy(track->envelopes, retained_envelopes, sizeof(track->envelopes));
+    track->local_envelope_tables = retained_tables;
+    for (unsigned i = 0; i < 2; ++i)
+        track->envelopes[i].enabled = false;
     track->active = pc < audio->sequence_size;
     track->pc = pc;
     track->parent = parent;
     track->flags = flags;
     for (unsigned i = 0; i < 16; ++i)
         track->children[i] = NO_TRACK;
+    for (unsigned i = 0; i < GC_AUDIO_NOTE_SLOTS; ++i)
+        track->note_voices[i] = NO_VOICE;
     track->parameters[0] = 1;
     track->parameters[3] = 0.5f;
     track->envelope_modes[0] = 15;
     track->envelope_modes[1] = 15;
     track->registers[7] = 12;
     track->registers[9] = 1;
+    track->registers[10] = 1;
     track->registers[11] = 0x7fff;
-    track->registers[13] = 0x4000;
+    track->registers[12] = 0x4000;
     track->timebase = parent < GC_AUDIO_TRACKS ? audio->tracks[parent].timebase : 48;
     track->time_mode = parent < GC_AUDIO_TRACKS ? audio->tracks[parent].time_mode : 1;
     if (audio->sequence_revision) {
+        track->registers[13] = 0x40;
         for (unsigned i = 0; i < 2; ++i) {
             track->envelopes[i].null_release_quick = true;
             track->envelopes[i].scaled_duration = true;
         }
-        /* The default track oscillator is present only when F0 installs it. */
-        track->envelopes[0].rate = 1;
-        track->envelopes[0].scale = 1;
-        track->envelopes[0].release_count = 2;
-        track->envelopes[0].release_identity = GC_AUDIO_TABLE_TEMPLATE | 1;
-        track->envelopes[0].release[0] = (GcAudioEnvelopeStep){0, 10, 0};
-        track->envelopes[0].release[1] = (GcAudioEnvelopeStep){15, 1, 0};
+        /* USA keeps both descriptor records; EUR 0x81357fc0 resets only
+         * descriptor zero. Inline ADSR backing survives either initializer.
+         * F0 must still install the default descriptor on future notes.
+         */
+        track->envelopes[0] = (GcAudioEnvelope){
+            .null_release_quick = true,
+            .scaled_duration = true,
+            .rate = 1,
+            .scale = 1,
+            .release_count = 2,
+            .release_identity = GC_AUDIO_TABLE_TEMPLATE | 1,
+            .release = {{0, 10, 0}, {15, 1, 0}},
+        };
         track->routes[0] = 0x150;
         track->routes[1] = 0x210;
         track->routes[2] = 0x352;
@@ -173,6 +279,8 @@ static void initialize_track(GcAudio *audio, unsigned index, unsigned parent,
         if (!(flags & 2)) {
             track->registers[6] = audio->tracks[parent].registers[6];
             track->registers[7] = audio->tracks[parent].registers[7];
+            if (audio->sequence_revision)
+                track->registers[13] = audio->tracks[parent].registers[13];
             memcpy(track->registers + 8, audio->tracks[parent].registers + 8,
                    5 * sizeof(track->registers[0]));
         }
@@ -189,13 +297,11 @@ static void open_track(GcAudio *audio, unsigned parent, unsigned selector, size_
         return;
     }
     unsigned child = track->children[slot];
+    bool reuse = child < GC_AUDIO_TRACKS && !audio->sequence_revision;
     if (child < GC_AUDIO_TRACKS)
         stop_track(audio, child);
-    else {
-        child = 1;
-        while (child < GC_AUDIO_TRACKS && audio->tracks[child].active)
-            ++child;
-    }
+    if (!reuse)
+        child = allocate_track(audio);
     if (child == GC_AUDIO_TRACKS) {
         ++audio->rejected_commands;
         return;
@@ -253,7 +359,7 @@ void gc_audio_sequence_event(GcAudio *audio, unsigned event) {
 void gc_audio_sequence_cube(GcAudio *audio, unsigned direction, float fraction) {
     /* sub_81359340, constants at 0x8145e500 (r2=0x81465cc0). */
     float root = sqrtf(fraction);
-    unsigned volume = direction ? 0 : (unsigned)(32767.0f * (1.0f - root));
+    unsigned volume = direction ? 0 : (unsigned)fmaf(-32767.0f, root, 32767.0f);
     port_write(find_track(audio, 0x21002), 1, (uint16_t)volume, true);
     if (root == 0)
         return;
@@ -290,11 +396,13 @@ static float inherited_parameter_depth(const GcAudio *audio, unsigned index,
         else if (parameter == 1)
             result += parent;
         else if (parameter == 2 || parameter == 3) {
-            /* sub_81356f00 loads the weight at track + 0x22c, register 12.
-             * Its native default is zero, preserving the child's panning.
-             */
+            /* Register twelve weights the parent pan and echo parameters. */
             float weight = (float)track->registers[12] / 32767.0f;
-            result = result * (1.0f - weight) + parent * weight;
+            float complement = 1.0f - weight;
+            if (audio->sequence_revision)
+                result = fmaf(result, complement, parent * weight);
+            else
+                result = fmaf(parent, weight, result * complement);
         }
     }
     return result;
@@ -305,52 +413,61 @@ static float inherited_parameter(const GcAudio *audio, unsigned index,
     return inherited_parameter_depth(audio, index, parameter, 0);
 }
 
-static float inherited_pitch(const GcAudio *audio, unsigned index) {
-    float result = 1;
-    for (unsigned depth = 0; depth < GC_AUDIO_TRACKS; ++depth) {
-        const GcAudioTrack *track = &audio->tracks[index];
-        /* sub_81357e60 uses 32768 / 8192 before the semitone lookup. */
-        float semitones = 4.0f * track->parameters[1] * track->registers[7];
-        result *= gc_audio_pitch_ratio(audio, semitones);
-        if (track->flags & 1 || track->parent >= GC_AUDIO_TRACKS)
-            break;
-        index = track->parent;
-    }
+static float inherited_pitch_depth(const GcAudio *audio, unsigned index,
+                                   unsigned depth) {
+    const GcAudioTrack *track = &audio->tracks[index];
+    /* The parent caches its complete inherited ratio before child FMULS. */
+    float semitones = 4.0f * track->parameters[1] * track->registers[7];
+    float result = gc_audio_pitch_ratio(audio, semitones);
+    if (!(track->flags & 1) && track->parent < GC_AUDIO_TRACKS &&
+        depth + 1 < GC_AUDIO_TRACKS)
+        result *= inherited_pitch_depth(audio, track->parent, depth + 1);
     return result;
 }
 
+static float inherited_pitch(const GcAudio *audio, unsigned index) {
+    return inherited_pitch_depth(audio, index, 0);
+}
+
 static void update_voice_pan(GcAudio *audio, GcAudioVoice *voice) {
-    const GcAudioTrack *track = &audio->tracks[voice->track];
-    float total =
-        (float)track->registers[8] + track->registers[9] + track->registers[10];
-    float pan = 0.5f;
-    float reverb = 0;
-    if (total > 0) {
-        /* sub_81358540 normalizes instrument, oscillator, and track weights.
-         * The bank's instrument and volume oscillators start at center.
-         */
-        float instrument_weight = (float)track->registers[8] / total;
-        float oscillator_weight = (float)track->registers[9] / total;
-        float track_weight = (float)track->registers[10] / total;
-        float track_pan = inherited_parameter(audio, voice->track, 3);
-        if (audio->sequence_revision) {
-            pan = 0.5f * instrument_weight;
-            pan += voice->envelope_pan * oscillator_weight;
-            pan += track_pan * track_weight;
-        } else {
-            pan = voice->envelope_pan * oscillator_weight;
-            pan = fmaf(0.5f, instrument_weight, pan);
-            pan = fmaf(track_pan, track_weight, pan);
-        }
-        reverb = inherited_parameter(audio, voice->track, 2) * track_weight;
+    float instrument_weight = voice->pan_weights[0];
+    float oscillator_weight = voice->pan_weights[1];
+    float track_weight = voice->pan_weights[2];
+    float pan;
+    if (audio->sequence_revision) {
+        pan = 0.5f * instrument_weight;
+        pan += voice->envelope_pan * oscillator_weight;
+        pan += voice->track_pan * track_weight;
+    } else {
+        pan = voice->envelope_pan * oscillator_weight;
+        pan = fmaf(0.5f, instrument_weight, pan);
+        pan = fmaf(voice->track_pan, track_weight, pan);
     }
+    float reverb = voice->track_reverb * track_weight;
     voice->pan = fmaxf(0, fminf(1, pan));
     voice->reverb = fmaxf(0, fminf(1, reverb));
+}
+
+static void initialize_voice_routing(const GcAudio *audio, GcAudioVoice *voice) {
+    const GcAudioTrack *track = &audio->tracks[voice->track];
+    float total = (float)track->registers[8] + (float)track->registers[9];
+    total = (float)track->registers[10] + total;
+    for (unsigned index = 0; index < 3; ++index)
+        voice->pan_weights[index] =
+            total > 0 ? (float)track->registers[8 + index] / total : 1.0f / 3.0f;
+    memcpy(voice->routes, track->routes, sizeof(voice->routes));
     for (unsigned route = 0; route < 6; ++route) {
-        unsigned bus = audio->sequence_revision ? track->routes[route] >> 8
-                                                : track->routes[route] >> 4;
+        unsigned bus = audio->sequence_revision ? voice->routes[route] >> 8
+                                                : voice->routes[route] >> 4;
         voice->buses[route] = bus < 12 ? bus : 0;
     }
+}
+
+static void refresh_voice_controls(const GcAudio *audio, GcAudioVoice *voice) {
+    voice->step = (float)voice->base_step * inherited_pitch(audio, voice->track);
+    voice->track_gain = inherited_parameter(audio, voice->track, 0);
+    voice->track_pan = inherited_parameter(audio, voice->track, 3);
+    voice->track_reverb = inherited_parameter(audio, voice->track, 2);
 }
 
 static float route_component(const GcAudio *audio, unsigned selector, unsigned route,
@@ -379,7 +496,7 @@ float gc_audio_route_scale(const GcAudio *audio, const GcAudioVoice *voice,
                            unsigned route, bool mono) {
     if (route >= 6 || voice->track >= GC_AUDIO_TRACKS || !voice->buses[route])
         return 0;
-    unsigned flags = audio->tracks[voice->track].routes[route];
+    unsigned flags = voice->routes[route];
     unsigned first = audio->sequence_revision ? flags >> 4 & 15 : flags >> 2 & 3;
     unsigned second = audio->sequence_revision ? flags & 15 : flags & 3;
     float pan = mono ? 0.5f : voice->pan;
@@ -391,7 +508,7 @@ float gc_audio_route_gain(const GcAudio *audio, const GcAudioVoice *voice,
                           unsigned route, bool mono) {
     if (route >= 6 || voice->track >= GC_AUDIO_TRACKS || !voice->buses[route])
         return 0;
-    unsigned flags = audio->tracks[voice->track].routes[route];
+    unsigned flags = voice->routes[route];
     unsigned first = audio->sequence_revision ? flags >> 4 & 15 : flags >> 2 & 3;
     unsigned second = audio->sequence_revision ? flags & 15 : flags & 3;
     float pan = mono ? 0.5f : voice->pan;
@@ -404,15 +521,61 @@ float gc_audio_route_gain(const GcAudio *audio, const GcAudioVoice *voice,
     return gain;
 }
 
+static void copy_live_envelope_table(const GcAudioTrack *track, uint32_t identity,
+                                     GcAudioEnvelopeStep *steps, unsigned *count,
+                                     const GcAudioEnvelopeStep *decoded,
+                                     unsigned decoded_count) {
+    if (identity == (GC_AUDIO_TABLE_LOCAL | 1)) {
+        *count = 4;
+        memset(steps, 0, GC_AUDIO_ENVELOPE_STEPS * sizeof(*steps));
+        memcpy(steps, track->local_envelope_tables.attack,
+               sizeof(track->local_envelope_tables.attack));
+    } else if (identity == (GC_AUDIO_TABLE_LOCAL | 2)) {
+        *count = 2;
+        memset(steps, 0, GC_AUDIO_ENVELOPE_STEPS * sizeof(*steps));
+        memcpy(steps, track->local_envelope_tables.release,
+               sizeof(track->local_envelope_tables.release));
+    } else {
+        *count = decoded_count;
+        memcpy(steps, decoded, GC_AUDIO_ENVELOPE_STEPS * sizeof(*steps));
+    }
+}
+
+static void refresh_live_envelope(const GcAudioTrack *track, GcAudioEnvelope *envelope,
+                                  const GcAudioEnvelope *source) {
+    /* Bank, sequence, and template tables are immutable. Inline ADSR tables
+     * retain their logical identity when their track-local contents change.
+     */
+    bool mutable_attack =
+        (source->attack_identity & ~GC_AUDIO_TABLE_OFFSET_MASK) == GC_AUDIO_TABLE_LOCAL;
+    bool mutable_release = (source->release_identity & ~GC_AUDIO_TABLE_OFFSET_MASK) ==
+                           GC_AUDIO_TABLE_LOCAL;
+    if (envelope->attack_identity != source->attack_identity || mutable_attack) {
+        copy_live_envelope_table(track, source->attack_identity, envelope->attack,
+                                 &envelope->attack_count, source->attack,
+                                 source->attack_count);
+    }
+    if (envelope->release_identity != source->release_identity || mutable_release) {
+        copy_live_envelope_table(track, source->release_identity, envelope->release,
+                                 &envelope->release_count, source->release,
+                                 source->release_count);
+    }
+    envelope->target = source->target;
+    envelope->rate = source->rate;
+    envelope->scale = source->scale;
+    envelope->offset = source->offset;
+    envelope->attack_identity = source->attack_identity;
+    envelope->release_identity = source->release_identity;
+    envelope->release_continues = source->release_continues;
+}
+
 void gc_audio_sequence_envelopes(GcAudio *audio, GcAudioVoice *voice) {
     const GcAudioTrack *track = &audio->tracks[voice->track];
     for (unsigned i = 0; i < GC_AUDIO_OSCILLATORS; ++i) {
         unsigned origin = voice->envelope_tracks[i];
         if (voice->envelopes[i].envelope.enabled && origin < 2) {
             GcAudioEnvelope *envelope = &voice->envelopes[i].envelope;
-            envelope->rate = track->envelopes[origin].rate;
-            envelope->scale = track->envelopes[origin].scale;
-            envelope->offset = track->envelopes[origin].offset;
+            refresh_live_envelope(track, envelope, &track->envelopes[origin]);
         }
     }
     gc_audio_voice_envelopes(voice);
@@ -457,18 +620,29 @@ static void install_track_envelopes(GcAudio *audio, GcAudioTrack *track,
         envelope.enabled = true;
         envelope.null_release_quick = audio->sequence_revision != 0;
         envelope.scaled_duration = audio->sequence_revision != 0;
+        if ((envelope.attack_identity & ~GC_AUDIO_TABLE_OFFSET_MASK) ==
+            GC_AUDIO_TABLE_LOCAL)
+            copy_live_envelope_table(track, envelope.attack_identity, envelope.attack,
+                                     &envelope.attack_count, track->envelopes[i].attack,
+                                     track->envelopes[i].attack_count);
+        if ((envelope.release_identity & ~GC_AUDIO_TABLE_OFFSET_MASK) ==
+            GC_AUDIO_TABLE_LOCAL)
+            copy_live_envelope_table(track, envelope.release_identity, envelope.release,
+                                     &envelope.release_count,
+                                     track->envelopes[i].release,
+                                     track->envelopes[i].release_count);
         voice->envelope_tracks[slot] = (uint8_t)i;
         gc_audio_voice_envelope_install(voice, slot, &envelope);
     }
 }
 
-static void start_note(GcAudio *audio, unsigned index, unsigned key, unsigned slot,
+static bool start_note(GcAudio *audio, unsigned index, unsigned key, unsigned slot,
                        unsigned velocity, unsigned duration) {
     GcAudioTrack *track = &audio->tracks[index];
     unsigned program = track->registers[6] & 255;
     if ((track->registers[6] >> 8) != 0 || program >= 128) {
         ++audio->rejected_commands;
-        return;
+        return false;
     }
     GcAudioInstrument *instrument = &audio->instruments[program];
     const GcAudioRegion *region = NULL;
@@ -481,31 +655,36 @@ static void start_note(GcAudio *audio, unsigned index, unsigned key, unsigned sl
     }
     if (!region) {
         ++audio->rejected_commands;
-        return;
+        return false;
     }
     unsigned wave = wave_index(audio, region->wave);
     if (wave == GC_AUDIO_WAVES) {
         ++audio->rejected_commands;
-        return;
+        return false;
     }
+    /* EUR replaces the slot through note-off. USA overwrites its handle;
+     * the older voice remains in the owner's active list with its gate.
+     */
+    if (audio->sequence_revision)
+        note_off(audio, index, slot);
+    else
+        track->note_voices[slot] = NO_VOICE;
     unsigned voice_index = GC_AUDIO_VOICES;
     for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
-        if (audio->voices[i].active && audio->voices[i].track == index &&
-            audio->voices[i].slot == slot) {
-            gc_audio_voice_release(&audio->voices[i]);
-        }
         if (!audio->voices[i].active && voice_index == GC_AUDIO_VOICES)
             voice_index = i;
     }
     if (voice_index == GC_AUDIO_VOICES) {
         ++audio->rejected_commands;
-        return;
+        return false;
     }
     GcAudioVoice *voice = &audio->voices[voice_index];
     memset(voice, 0, sizeof(*voice));
     voice->active = true;
     voice->track = index;
+    voice->owner_track = index;
     voice->slot = slot;
+    track->note_voices[slot] = voice_index;
     voice->wave = wave;
     float semitones = (float)((int)key - (int)audio->waves[wave].key);
     float wave_pitch;
@@ -520,7 +699,8 @@ static void start_note(GcAudio *audio, unsigned index, unsigned key, unsigned sl
         wave_pitch = (float)rate_pitch;
     }
     voice->base_step = wave_pitch * gc_audio_pitch_ratio(audio, semitones);
-    voice->step = (float)voice->base_step * inherited_pitch(audio, index);
+    initialize_voice_routing(audio, voice);
+    refresh_voice_controls(audio, voice);
     voice->base_gain = instrument->volume * region->volume;
     if (audio->sequence_revision) {
         float velocity_gain = (float)velocity / 127.0f;
@@ -530,9 +710,8 @@ static void start_note(GcAudio *audio, unsigned index, unsigned key, unsigned sl
         voice->base_gain *= (float)velocity;
         voice->base_gain /= 127.0f;
     }
-    voice->track_gain = inherited_parameter(audio, index, 0);
     update_voice_pan(audio, voice);
-    voice->duration = duration;
+    voice->duration = audio->sequence_revision && !duration ? UINT32_MAX : duration;
     memset(voice->envelope_tracks, 2, sizeof(voice->envelope_tracks));
     for (unsigned i = 0; i < 2; ++i) {
         GcAudioEnvelope envelope = instrument->envelopes[i];
@@ -546,17 +725,38 @@ static void start_note(GcAudio *audio, unsigned index, unsigned key, unsigned sl
     /* Initial gains use the same mono snapshot as this render callback. */
     gc_audio_dsp_voice_begin(audio, voice, audio->render_mono);
     ++audio->notes_started;
+    return true;
 }
 
-static void note_off(GcAudio *audio, unsigned index, unsigned slot) {
-    for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
-        if (audio->voices[i].active && audio->voices[i].track == index &&
-            audio->voices[i].slot == slot)
-            gc_audio_voice_release(&audio->voices[i]);
+static unsigned gate_duration(const GcAudio *audio, const GcAudioTrack *track,
+                              unsigned duration, unsigned gate) {
+    /* Each native FMULS/FDIVS rounds before the final integer truncation. */
+    float length = (float)duration * (float)(gate & 255);
+    length /= 100.0f;
+    if (track->time_mode == 1) {
+        float fraction = (float)audio->tempo * (float)audio->timebase;
+        if (audio->sequence_revision) {
+            float factor = 60.0f * (float)GC_AUDIO_DSP_RATE;
+            factor /= 80.0f;
+            fraction /= factor;
+        } else {
+            fraction /= 25200.0f;
+        }
+        length /= fraction;
+    } else {
+        length *= 120.0f;
+        length /= (float)track->timebase;
+        if (!audio->sequence_revision) {
+            length *= 7.0f;
+            length /= 10.0f;
+        }
     }
+    if (!isfinite(length) || length >= 0x1p32f)
+        return UINT32_MAX;
+    return length > 0 ? (unsigned)length : 0;
 }
 
-static void note_command(GcAudio *audio, unsigned index, unsigned note) {
+static bool note_command(GcAudio *audio, unsigned index, unsigned note) {
     GcAudioTrack *track = &audio->tracks[index];
     unsigned flags = read_bytes(audio, track, 1);
     unsigned velocity = note_operand(track, read_bytes(audio, track, 1));
@@ -584,26 +784,17 @@ static void note_command(GcAudio *audio, unsigned index, unsigned note) {
     key &= 255;
     track->previous_key = key;
     if (!track->active || velocity > 127 || slot > 7)
-        return;
+        return false;
     unsigned note_duration = UINT32_MAX;
     if (duration != UINT32_MAX && !(flags & 0x20)) {
-        /* sub_813552a0 converts gates into native DSP updates. Mode zero uses
-         * 120 * 7 / 10; mode one divides by the sequence's tempo fraction.
-         */
-        double length = (double)duration * gate / 100.0;
-        double fraction = audio->sequence_revision
-                              ? (double)audio->tempo * audio->timebase *
-                                    GC_AUDIO_DSP_QUANTUM / (60.0 * GC_AUDIO_DSP_RATE)
-                              : (double)audio->tempo * audio->timebase / 25200.0;
-        length =
-            track->time_mode == 1
-                ? length / fraction
-                : length * (audio->sequence_revision ? 120.0 : 84.0) / track->timebase;
-        note_duration = length >= UINT32_MAX ? UINT32_MAX : (unsigned)length;
+        note_duration = gate_duration(audio, track, duration, gate);
     }
-    start_note(audio, index, (unsigned)key, slot, velocity, note_duration);
+    bool started =
+        start_note(audio, index, (unsigned)key, slot, velocity, note_duration);
+    track->clear_note_on_wait = started && duration != UINT32_MAX && !(flags & 0x60);
     if (duration != UINT32_MAX)
-        track->wait = duration;
+        track->wait = audio->sequence_revision && !duration ? UINT32_MAX : duration;
+    return duration != UINT32_MAX;
 }
 
 static int32_t immediate_operand(GcAudio *audio, GcAudioTrack *track, unsigned type) {
@@ -636,6 +827,11 @@ static void oscillator_parameter(GcAudioTrack *track, unsigned parameter, float 
     }
 }
 
+static int32_t signed_word(uint32_t value) {
+    uint32_t word = (uint16_t)value;
+    return word >= 0x8000 ? (int32_t)word - 0x10000 : (int32_t)word;
+}
+
 static void parameter_command(GcAudio *audio, GcAudioTrack *track, unsigned opcode) {
     unsigned parameter = read_bytes(audio, track, 1);
     int32_t value = immediate_operand(audio, track, opcode);
@@ -663,7 +859,7 @@ static void parameter_command(GcAudio *audio, GcAudioTrack *track, unsigned opco
         ++audio->rejected_commands;
         return;
     }
-    float target = (float)value / 32768.0f;
+    float target = (float)signed_word((uint32_t)value) / 32768.0f;
     track->parameter_targets[parameter] = target;
     track->parameter_ticks[parameter] = duration;
     if (duration)
@@ -760,6 +956,10 @@ static void oscillator_adsr(GcAudio *audio, GcAudioTrack *track) {
     envelope->release_count = 2;
     envelope->release[0] = (GcAudioEnvelopeStep){0, (uint16_t)values[4], 0};
     envelope->release[1] = (GcAudioEnvelopeStep){15, 1, 0};
+    memcpy(track->local_envelope_tables.attack, envelope->attack,
+           sizeof(track->local_envelope_tables.attack));
+    memcpy(track->local_envelope_tables.release, envelope->release,
+           sizeof(track->local_envelope_tables.release));
 }
 
 static uint32_t table_value(GcAudio *audio, GcAudioTrack *track, size_t base,
@@ -805,16 +1005,18 @@ static void register_command(GcAudio *audio, GcAudioTrack *track, unsigned opcod
     if (operation == 0xa)
         base = get_wide_register(track, read_bytes(audio, track, 1));
     int32_t operand = immediate_operand(audio, track, type);
-    int32_t current = (int16_t)get_register(track, reg);
+    int32_t current = signed_word(get_register(track, reg));
     uint32_t value = (uint32_t)operand;
     switch (operation) {
         case 1:
             value = (uint32_t)(current + (type == 4 ? (int8_t)operand : operand));
             break;
-        case 2:
-            track->registers[4] = (uint16_t)((current * operand) >> 16);
-            track->registers[5] = (uint16_t)(current * operand);
+        case 2: {
+            uint32_t product = (uint32_t)(current * signed_word((uint32_t)operand));
+            track->registers[4] = (uint16_t)(product >> 16);
+            track->registers[5] = (uint16_t)product;
             return;
+        }
         case 3:
             track->registers[3] = (uint16_t)(current - operand);
             return;
@@ -1097,10 +1299,22 @@ static void control_command(GcAudio *audio, unsigned index, unsigned opcode) {
             track->registers[3] = 0xffff;
             break;
         case 0xe8:
+            for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
+                GcAudioVoice *voice = &audio->voices[i];
+                if (voice->active && voice->owner_track == index &&
+                    !voice->on_release_list)
+                    gc_audio_voice_release(audio, voice);
+            }
+            if (!audio->sequence_revision)
+                break;
+            /* EUR E8 continues through the newly populated release list. */
+            /* fall through */
         case 0xe9:
             for (unsigned i = 0; i < GC_AUDIO_VOICES; ++i) {
-                if (audio->voices[i].active && audio->voices[i].track == index)
-                    gc_audio_voice_release(&audio->voices[i]);
+                GcAudioVoice *voice = &audio->voices[i];
+                if (voice->active && voice->owner_track == index &&
+                    voice->on_release_list)
+                    quick_release_voice(audio, voice);
             }
             break;
         case 0xea:
@@ -1155,8 +1369,19 @@ static void step_track(GcAudio *audio, unsigned index, unsigned depth) {
     }
     track->interrupt_pending |= 1u << 7;
     begin_interrupt(track);
-    if (track->wait)
+    if (audio->sequence_revision && track->wait == UINT32_MAX) {
+        /* EUR duration zero waits for the current ordinary note to retire.
+         * It is not the positive countdown path that clears finite handles.
+         */
+        if (!current_note_voice(audio, index, 0))
+            track->wait = 0;
+    } else if (track->wait) {
         --track->wait;
+        if (!track->wait && track->clear_note_on_wait) {
+            track->note_voices[0] = NO_VOICE;
+            track->clear_note_on_wait = false;
+        }
+    }
     if (!track->wait) {
         unsigned instructions = 0;
         while (track->active && !track->wait && instructions++ < 4096) {
@@ -1164,7 +1389,8 @@ static void step_track(GcAudio *audio, unsigned index, unsigned depth) {
             if (!track->active)
                 break;
             if (opcode < 0x80) {
-                note_command(audio, index, opcode);
+                if (note_command(audio, index, opcode) && !track->wait)
+                    break;
             } else if ((opcode & 0xf0) == 0x80) {
                 unsigned slot = opcode & 15;
                 if (!slot || slot == 8)
@@ -1192,8 +1418,7 @@ static void step_track(GcAudio *audio, unsigned index, unsigned depth) {
     for (unsigned parameter = 0; parameter < 17; ++parameter) {
         if (track->parameter_ticks[parameter]) {
             track->parameters[parameter] += track->parameter_steps[parameter];
-            if (!--track->parameter_ticks[parameter])
-                track->parameters[parameter] = track->parameter_targets[parameter];
+            --track->parameter_ticks[parameter];
             oscillator_parameter(track, parameter, track->parameters[parameter]);
         }
     }
@@ -1213,6 +1438,13 @@ void gc_audio_sequence_init(GcAudio *audio) {
     atomic_init(&audio->sequence_stopped, false);
     audio->tempo = 120;
     audio->timebase = 48;
+    for (unsigned index = 0; index < GC_AUDIO_CHILD_TRACKS; ++index) {
+        audio->free_tracks[index] = index + 1;
+        audio->track_available[index] = true;
+    }
+    audio->free_track_read = 0;
+    audio->free_track_write = 0;
+    audio->free_track_count = GC_AUDIO_CHILD_TRACKS;
     initialize_track(audio, 0, NO_TRACK, 0, 0);
     step_track(audio, 0, 0);
 }
@@ -1244,10 +1476,8 @@ void gc_audio_sequence_tick(GcAudio *audio) {
         GcAudioVoice *voice = &audio->voices[i];
         if (!voice->active)
             continue;
-        if (!voice->released) {
-            voice->step =
-                (float)voice->base_step * inherited_pitch(audio, voice->track);
-            voice->track_gain = inherited_parameter(audio, voice->track, 0);
+        if (!voice->detached) {
+            refresh_voice_controls(audio, voice);
             update_voice_pan(audio, voice);
         }
     }

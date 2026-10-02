@@ -50,7 +50,7 @@ void gc_audio_reset(GcAudio *audio) {
     }
     audio->tick_fraction = 0;
     audio->update_samples = 0;
-    audio->output_fraction = 0;
+    audio->output_phase = 0;
     audio->output_ready = false;
     audio->chorus_read = audio->sequence_revision ? 150u * 65536u : 0;
     audio->chorus_direction = audio->sequence_revision ? -1 : 0;
@@ -125,6 +125,8 @@ void gc_audio_render(GcAudio *audio, float *stereo, size_t frames) {
     if (!audio || !frames)
         return;
     bool mono = atomic_load_explicit(&audio->mono, memory_order_relaxed);
+    unsigned denominator = audio->sample_rate * 2;
+    double phase_scale = 1.0 / denominator;
     if (!audio->output_ready) {
         gc_audio_dsp_render_frame(audio, mono, audio->output_previous);
         gc_audio_dsp_render_frame(audio, mono, audio->output_next);
@@ -134,18 +136,23 @@ void gc_audio_render(GcAudio *audio, float *stereo, size_t frames) {
         /* The firmware mixes at its DAC clock. This final linear conversion
          * adapts that stream to the host's requested rate, outside the DSP.
          */
-        float fraction = (float)audio->output_fraction;
-        for (unsigned channel = 0; channel < 2; ++channel)
+        float fraction = (float)((double)audio->output_phase * phase_scale);
+        for (unsigned channel = 0; channel < 2; ++channel) {
+            float difference =
+                audio->output_next[channel] - audio->output_previous[channel];
             stereo[frame * 2 + channel] =
-                audio->output_previous[channel] +
-                (audio->output_next[channel] - audio->output_previous[channel]) *
-                    fraction;
-        audio->output_fraction += GC_AUDIO_DSP_RATE / audio->sample_rate;
-        while (audio->output_fraction >= 1) {
+                fmaf(difference, fraction, audio->output_previous[channel]);
+        }
+        /* The native DAC clock is exactly 64057/2 in the recovered setup.
+         * Integer phase avoids rounding away a source-frame boundary. Valid
+         * host rates keep this accumulator below 448057, including its step.
+         */
+        audio->output_phase += 64057;
+        while (audio->output_phase >= denominator) {
             memcpy(audio->output_previous, audio->output_next,
                    sizeof(audio->output_previous));
             gc_audio_dsp_render_frame(audio, mono, audio->output_next);
-            audio->output_fraction -= 1;
+            audio->output_phase -= denominator;
         }
     }
     unsigned active = 0;

@@ -253,6 +253,7 @@ static void test_source_end(size_t count, bool afc_source, uint64_t start_q12,
         (GcAudioWave){.samples = samples, .count = count, .afc_source = afc_source};
     GcAudioVoice *voice = &audio->voices[0];
     *voice = (GcAudioVoice){.active = true,
+                            .detached = true,
                             .released = true,
                             .position = (double)start_q12 / 4096,
                             .step = (double)pitch_q12 / 4096,
@@ -260,7 +261,9 @@ static void test_source_end(size_t count, bool afc_source, uint64_t start_q12,
                             .track_gain = 1,
                             .envelope_volume = 1,
                             .envelope_pitch = 1,
-                            .duration = UINT32_MAX};
+                            .duration = UINT32_MAX,
+                            .routes = {0x10},
+                            .pan_weights = {0, 1, 0}};
     voice->buses[0] = 1;
     gc_audio_dsp_voice_begin(audio, voice, false);
     size_t endpoint = afc_source ? count / 16 * 16 : count;
@@ -309,6 +312,7 @@ static void test_block_pitch(void) {
     audio->waves[0] = (GcAudioWave){.samples = samples, .count = 240};
     GcAudioVoice *voice = &audio->voices[0];
     *voice = (GcAudioVoice){.active = true,
+                            .detached = true,
                             .released = true,
                             .step = 1,
                             .envelope_pitch = 1,

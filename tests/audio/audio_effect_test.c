@@ -19,6 +19,42 @@ typedef struct {
     uint32_t block_reads[3];
 } ChorusScenario;
 
+static void test_signed_output_gain_and_clipping(void) {
+    const struct {
+        uint16_t gain;
+        int16_t sample;
+        int16_t output;
+    } vectors[] = {{0x4000, 1, 4},
+                   {0x4000, -1, -4},
+                   {0x4000, 8191, 32764},
+                   {0x4000, 8192, INT16_MAX},
+                   {0x4000, -8192, INT16_MIN},
+                   {0x7fff, 1, 7},
+                   {0x7fff, -1, -8},
+                   {0x7fff, 4096, INT16_MAX},
+                   {0x7fff, -4096, -32767},
+                   {0x7fff, -4097, INT16_MIN},
+                   {0x8000, 1, -8},
+                   {0x8000, -1, 8},
+                   {0x8000, 4096, INT16_MIN},
+                   {0x8000, -4096, INT16_MAX},
+                   {0x8000, 0, 0},
+                   {0xffff, 1, -1},
+                   {0xffff, -1, 0},
+                   {0xffff, 4096, -1},
+                   {0xffff, -4096, 1},
+                   {0xffff, INT16_MAX, -8},
+                   {0xffff, INT16_MIN, 8}};
+    GcAudio *audio = calloc(1, sizeof(*audio));
+    assert(audio);
+    for (size_t index = 0; index < sizeof(vectors) / sizeof(vectors[0]); ++index) {
+        audio->output_gain = vectors[index].gain;
+        assert(gc_audio_dsp_output(audio, vectors[index].sample) ==
+               vectors[index].output);
+    }
+    free(audio);
+}
+
 static void test_mode_two_history_tail_and_clipping(void) {
     GcAudio *audio = calloc(1, sizeof(*audio));
     assert(audio);
@@ -127,6 +163,7 @@ static void test_chorus_fractional_block_boundaries(void) {
 }
 
 int main(void) {
+    test_signed_output_gain_and_clipping();
     test_mode_two_history_tail_and_clipping();
     test_chorus_fractional_block_boundaries();
     puts("Audio effect regressions passed.");

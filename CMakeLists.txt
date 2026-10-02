@@ -186,9 +186,16 @@ if(BUILD_TESTING)
     target_link_libraries(gc-tool-output-test PRIVATE gamecube_tool_io)
     add_test(NAME gc-tool-output COMMAND gc-tool-output-test)
     gc_test_directory(gc-tool-output tool-output)
+    if(APPLE)
+        gc_test_executable(gc-audio_device-test tests/audio/audio_device_test.c)
+        target_include_directories(gc-audio_device-test PRIVATE include)
+        add_test(NAME gc-audio-device COMMAND gc-audio_device-test)
+    endif()
     foreach(source
         app/error_control app/frame_control app/input_control
-        audio/audio audio/audio_cycle audio/audio_effect audio/audio_voice
+        audio/audio audio/audio_control audio/audio_cycle audio/audio_effect
+        audio/audio_output audio/audio_release audio/audio_resource audio/audio_track
+        audio/audio_voice
         audio/navigation_sound
         cards/card_art cards/card_cells cards/card_image cards/card_lighting
         cards/card_operation cards/card_popup cards/card_usage
@@ -207,7 +214,7 @@ if(BUILD_TESTING)
     foreach(region USA EUR JAP)
         set(GC_PRIVATE_IPL "${PROJECT_SOURCE_DIR}/Files/GameCube_BIOS/${region}/IPL.bin")
         if(EXISTS "${GC_PRIVATE_IPL}")
-            foreach(module audio text font startup boot_control layout
+            foreach(module audio audio_resource text font startup boot_control layout
                 texture_collection menu_animation face_geometry edit_geometry
                 help page_transition card_popup card_usage card_lighting
                 card_cells value_morph scene card-runtime card-cells-scene)
