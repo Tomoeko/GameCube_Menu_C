@@ -1,5 +1,5 @@
 #include "app_options.h"
-#include "option_values.h"
+#include "support/option_values.h"
 #include "gamecube/config.h"
 
 #include <limits.h>

@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "gamecube/render.h"
-#include "software.h"
+#include "render/software/software.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -21,7 +21,7 @@ static void test_draw(GcScene *scene, const gc_menu *menu);
 #define cc_platform_set_fullscreen test_set_fullscreen
 #define gc_scene_draw test_draw
 #define main test_application_main
-#include "../src/main.c"
+#include "app/main.c"
 #undef main
 #undef gc_scene_draw
 #undef cc_platform_poll

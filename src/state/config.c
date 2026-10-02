@@ -1,5 +1,5 @@
 #include "gamecube/config.h"
-#include "card_checksum.h"
+#include "cards/card_checksum.h"
 #include "console_common/support/endian.h"
 
 #include <ctype.h>

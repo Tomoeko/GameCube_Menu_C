@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "output.h"
+#include "support/output.h"
 
 #include <assert.h>
 #include <errno.h>

@@ -1,5 +1,5 @@
 #include "gamecube/card_popup.h"
-#include "native_constants.h"
+#include "resources/native_constants.h"
 
 #include <math.h>
 

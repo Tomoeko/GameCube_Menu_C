@@ -2,10 +2,10 @@
  * software backend, including actual IPL assets and sequencer state.
  */
 #define main gc_application_main
-#include "../src/main.c"
+#include "app/main.c"
 #undef main
-#include "software.h"
-#include "../src/audio_internal.h"
+#include "render/software/software.h"
+#include "audio/audio_internal.h"
 
 #include <assert.h>
 

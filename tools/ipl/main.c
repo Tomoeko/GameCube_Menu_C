@@ -1,6 +1,6 @@
 #include "gamecube/ipl.h"
 #include "console_common/support/endian.h"
-#include "output.h"
+#include "support/output.h"
 
 #include <stdio.h>
 #include <stdlib.h>

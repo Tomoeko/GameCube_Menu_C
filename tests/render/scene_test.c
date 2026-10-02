@@ -1,6 +1,6 @@
 #include "gamecube/render.h"
 #include "gamecube/frame_history.h"
-#include "software.h"
+#include "render/software/software.h"
 
 #include <assert.h>
 #include <math.h>

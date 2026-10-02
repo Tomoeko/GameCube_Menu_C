@@ -30,43 +30,83 @@ function(gc_warnings target)
     endif()
 endfunction()
 
-add_library(gamecube_core STATIC src/menu.c src/menu_clock.c src/menu_cards.c
-    src/text.c src/font.c src/ipl.c src/ipl_model.c src/ipl_texture.c
-    src/ipl_material.c src/ipl_animation.c src/audio.c src/audio_resources.c
-    src/audio_dsp.c
-    src/audio_sequence.c src/audio_envelope.c
-    src/card_image.c src/card_checksum.c src/card_art.c src/services.c src/state.c src/disc.c
-    src/startup.c src/startup_resources.c src/startup_motion.c
-    src/layout.c src/texture_collection.c src/menu_animation.c src/face_geometry.c
-    src/edit_geometry.c
-    src/boot_control.c src/help.c src/page_transition.c src/card_operation.c
-    src/launch_control.c src/navigation_sound.c src/input_control.c src/config.c
-    src/card_popup.c
-    src/frame_control.c src/card_usage.c src/card_lighting.c src/card_cells.c
-    src/disc_control.c src/error_control.c
-    src/value_morph.c src/option_values.c)
-target_include_directories(gamecube_core PUBLIC include)
+add_library(gamecube_core STATIC
+    src/app/error_control.c
+    src/app/frame_control.c
+    src/app/input_control.c
+    src/audio/audio.c
+    src/audio/audio_dsp.c
+    src/audio/audio_envelope.c
+    src/audio/audio_resources.c
+    src/audio/audio_sequence.c
+    src/audio/navigation_sound.c
+    src/cards/card_art.c
+    src/cards/card_cells.c
+    src/cards/card_checksum.c
+    src/cards/card_image.c
+    src/cards/card_lighting.c
+    src/cards/card_operation.c
+    src/cards/card_popup.c
+    src/cards/card_usage.c
+    src/disc/disc.c
+    src/disc/disc_control.c
+    src/disc/launch_control.c
+    src/menu/edit_geometry.c
+    src/menu/face_geometry.c
+    src/menu/help.c
+    src/menu/menu.c
+    src/menu/menu_animation.c
+    src/menu/menu_cards.c
+    src/menu/menu_clock.c
+    src/menu/page_transition.c
+    src/menu/value_morph.c
+    src/resources/font.c
+    src/resources/ipl.c
+    src/resources/ipl_animation.c
+    src/resources/ipl_material.c
+    src/resources/ipl_model.c
+    src/resources/ipl_texture.c
+    src/resources/layout.c
+    src/resources/text.c
+    src/resources/texture_collection.c
+    src/startup/boot_control.c
+    src/startup/startup.c
+    src/startup/startup_motion.c
+    src/startup/startup_resources.c
+    src/state/config.c
+    src/state/services.c
+    src/state/state.c
+    src/support/option_values.c)
+target_include_directories(gamecube_core PUBLIC include PRIVATE src)
 target_link_libraries(gamecube_core PUBLIC console_common)
 gc_warnings(gamecube_core)
 if(APPLE)
-    target_sources(gamecube_core PRIVATE src/platform/audio_apple.c)
+    target_sources(gamecube_core PRIVATE src/platform/apple/audio_apple.c)
     target_link_libraries(gamecube_core PUBLIC "-framework AudioToolbox")
 endif()
 
-add_library(gamecube_scene STATIC src/render.c src/render_resources.c src/render_state.c
-    src/render_mesh.c src/render_layout.c src/render_material.c src/card_runtime.c
-    src/frame_history.c)
+add_library(gamecube_scene STATIC
+    src/app/frame_history.c
+    src/cards/card_runtime.c
+    src/render/render.c
+    src/render/render_layout.c
+    src/render/render_material.c
+    src/render/render_mesh.c
+    src/render/render_resources.c
+    src/render/render_state.c)
 target_include_directories(gamecube_scene PUBLIC include PRIVATE src)
 target_link_libraries(gamecube_scene PUBLIC gamecube_core)
 gc_warnings(gamecube_scene)
 
 # The offline backend is shared by capture tools and headless scene tests.
-add_library(gamecube_software STATIC src/software.c src/software_material.c)
+add_library(gamecube_software STATIC
+    src/render/software/software.c
+    src/render/software/software_material.c)
 target_include_directories(gamecube_software PRIVATE src)
 target_link_libraries(gamecube_software PUBLIC console_common)
 gc_warnings(gamecube_software)
 
-add_library(gamecube_tool_io STATIC tools/output.c)
+add_library(gamecube_tool_io STATIC tools/support/output.c)
 target_include_directories(gamecube_tool_io PUBLIC tools)
 gc_warnings(gamecube_tool_io)
 
@@ -79,7 +119,7 @@ target_link_libraries(gc-audio-tool PRIVATE gamecube_core gamecube_tool_io)
 target_include_directories(gc-audio-tool PRIVATE src)
 gc_warnings(gc-audio-tool)
 
-add_executable(gamecube-render tools/render.c)
+add_executable(gamecube-render tools/render/main.c)
 target_include_directories(gamecube-render PRIVATE src)
 target_link_libraries(gamecube-render PRIVATE gamecube_scene gamecube_software
     gamecube_tool_io)
@@ -94,7 +134,7 @@ endif()
 set_property(CACHE GC_BACKEND PROPERTY STRINGS metal gles2)
 if(GC_BUILD_APP)
     if(APPLE)
-        add_executable(gamecube-menu MACOSX_BUNDLE src/main.c src/app_options.c)
+        add_executable(gamecube-menu MACOSX_BUNDLE src/app/main.c src/app/app_options.c)
         set_target_properties(gamecube-menu PROPERTIES
             MACOSX_BUNDLE_GUI_IDENTIFIER "org.menu-recovery.gamecube-menu-c"
             MACOSX_BUNDLE_BUNDLE_NAME "GameCube Menu in C")
@@ -106,7 +146,7 @@ if(GC_BUILD_APP)
         set_property(TARGET gamecube-menu APPEND PROPERTY LINK_DEPENDS
             "${PROJECT_SOURCE_DIR}/tools/launch.sh")
     else()
-        add_executable(gamecube-menu src/main.c src/app_options.c)
+        add_executable(gamecube-menu src/app/main.c src/app/app_options.c)
     endif()
     target_include_directories(gamecube-menu PRIVATE src)
     target_link_libraries(gamecube-menu PRIVATE gamecube_scene)
@@ -130,16 +170,24 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/tests/${directory}")
     endfunction()
 
-    gc_test_executable(gc-tool-output-test tests/tool_output_test.c)
+    gc_test_executable(gc-tool-output-test tests/tools/tool_output_test.c)
     target_link_libraries(gc-tool-output-test PRIVATE gamecube_tool_io)
     add_test(NAME gc-tool-output COMMAND gc-tool-output-test)
     gc_test_directory(gc-tool-output tool-output)
-    foreach(name menu ipl ipl_model ipl_material ipl_animation card_image card_art
-        state services audio text font disc startup layout texture_collection menu_animation
-        face_geometry edit_geometry boot_control help page_transition card_operation
-        launch_control navigation_sound input_control config frame_control card_popup
-        card_usage card_lighting card_cells value_morph disc_control error_control)
-        gc_test_executable(gc-${name}-test tests/${name}_test.c)
+    foreach(source
+        app/error_control app/frame_control app/input_control
+        audio/audio audio/navigation_sound
+        cards/card_art cards/card_cells cards/card_image cards/card_lighting
+        cards/card_operation cards/card_popup cards/card_usage
+        disc/disc disc/disc_control disc/launch_control
+        menu/edit_geometry menu/face_geometry menu/help menu/menu menu/menu_animation
+        menu/page_transition menu/value_morph
+        resources/font resources/ipl resources/ipl_animation resources/ipl_material
+        resources/ipl_model resources/layout resources/text resources/texture_collection
+        startup/boot_control startup/startup
+        state/config state/services state/state)
+        get_filename_component(name "${source}" NAME)
+        gc_test_executable(gc-${name}-test tests/${source}_test.c)
         target_link_libraries(gc-${name}-test PRIVATE gamecube_core)
         add_test(NAME gc-${name} COMMAND gc-${name}-test)
     endforeach()
@@ -168,33 +216,38 @@ if(BUILD_TESTING)
                 "${CMAKE_BINARY_DIR}/tests/app-control/${region}/Files")
         endif()
     endforeach()
-    gc_test_executable(gc-software-test tests/software_test.c)
+    gc_test_executable(gc-software-test tests/render/software_test.c)
     target_link_libraries(gc-software-test PRIVATE gamecube_core gamecube_software)
     add_test(NAME gc-software COMMAND gc-software-test
         "${CMAKE_BINARY_DIR}/software-test.ppm")
-    gc_test_executable(gc-render_material-test tests/render_material_test.c)
-    target_link_libraries(gc-render_material-test PRIVATE gamecube_scene gamecube_software)
+    gc_test_executable(gc-render_material-test tests/render/render_material_test.c)
+    target_link_libraries(gc-render_material-test PRIVATE
+        gamecube_scene gamecube_software)
     add_test(NAME gc-render-material COMMAND gc-render_material-test
         "${CMAKE_BINARY_DIR}/render-material-test.ppm")
-    gc_test_executable(gc-scene-test tests/scene_test.c)
+    gc_test_executable(gc-scene-test tests/render/scene_test.c)
     target_link_libraries(gc-scene-test PRIVATE gamecube_scene gamecube_software)
     add_test(NAME gc-scene COMMAND gc-scene-test)
-    gc_test_executable(gc-card-cells-scene-test tests/card_cells_scene_test.c)
-    target_link_libraries(gc-card-cells-scene-test PRIVATE gamecube_scene gamecube_software)
+    gc_test_executable(gc-card-cells-scene-test tests/cards/card_cells_scene_test.c)
+    target_link_libraries(gc-card-cells-scene-test PRIVATE
+        gamecube_scene gamecube_software)
     add_test(NAME gc-card-cells-scene COMMAND gc-card-cells-scene-test)
-    gc_test_executable(gc-card-runtime-test tests/card_runtime_test.c)
+    gc_test_executable(gc-card-runtime-test tests/cards/card_runtime_test.c)
     target_link_libraries(gc-card-runtime-test PRIVATE gamecube_scene gamecube_software)
     add_test(NAME gc-card-runtime COMMAND gc-card-runtime-test)
     gc_test_directory(gc-card-runtime card-runtime/base)
-    gc_test_executable(gc-frame-history-test tests/frame_history_test.c)
+    gc_test_executable(gc-frame-history-test tests/app/frame_history_test.c)
     target_link_libraries(gc-frame-history-test PRIVATE gamecube_scene)
     add_test(NAME gc-frame-history COMMAND gc-frame-history-test)
-    gc_test_executable(gc-app-tick-test tests/app_tick_test.c src/app_options.c)
+    gc_test_executable(gc-app-tick-test
+        tests/app/app_tick_test.c src/app/app_options.c)
     target_link_libraries(gc-app-tick-test PRIVATE gamecube_scene gamecube_software)
-    gc_test_executable(gc-app-control-test tests/app_control_test.c src/app_options.c)
+    gc_test_executable(gc-app-control-test
+        tests/app/app_control_test.c src/app/app_options.c)
     target_link_libraries(gc-app-control-test PRIVATE gamecube_scene gamecube_software)
     add_test(NAME gc-app-window-controls COMMAND gc-app-control-test)
-    gc_test_executable(gc-app-options-test tests/app_options_test.c src/app_options.c)
+    gc_test_executable(gc-app-options-test
+        tests/app/app_options_test.c src/app/app_options.c)
     target_link_libraries(gc-app-options-test PRIVATE gamecube_core)
     add_test(NAME gc-app-options COMMAND gc-app-options-test)
     if(GC_BUILD_APP)
@@ -218,7 +271,7 @@ find_program(GC_CLANG_FORMAT NAMES clang-format HINTS
     /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin)
 if(GC_CLANG_FORMAT)
     file(GLOB_RECURSE GC_FORMAT_SOURCES CONFIGURE_DEPENDS
-        include/*.h src/*.c src/*.h tools/*.c tests/*.c)
+        include/*.h src/*.c src/*.h tools/*.c tools/*.h tests/*.c)
     add_custom_target(gc-check-format COMMAND "${GC_CLANG_FORMAT}"
         --dry-run --Werror ${GC_FORMAT_SOURCES} VERBATIM)
 endif()

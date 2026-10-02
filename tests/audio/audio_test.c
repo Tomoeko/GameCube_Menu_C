@@ -1,6 +1,6 @@
 #include "gamecube/audio.h"
 #include "gamecube/ipl.h"
-#include "../src/audio_internal.h"
+#include "audio/audio_internal.h"
 
 #include <assert.h>
 #include <math.h>

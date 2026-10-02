@@ -1,5 +1,5 @@
 #include "gamecube/frame_history.h"
-#include "render_state.h"
+#include "render/render_state.h"
 
 #include <stddef.h>
 #include <stdlib.h>

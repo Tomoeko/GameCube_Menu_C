@@ -1,7 +1,7 @@
 #include "gamecube/edit_geometry.h"
 #include "console_common/support/endian.h"
 #include "gamecube/angle.h"
-#include "native_constants.h"
+#include "resources/native_constants.h"
 #include "gamecube/layout.h"
 
 #include <math.h>

@@ -1,4 +1,4 @@
-#include "../audio_internal.h"
+#include "audio/audio_internal.h"
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <stdlib.h>

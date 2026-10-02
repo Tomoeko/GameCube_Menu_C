@@ -1,7 +1,7 @@
 #include "gamecube/render.h"
-#include "software.h"
-#include "output.h"
-#include "option_values.h"
+#include "render/software/software.h"
+#include "support/output.h"
+#include "support/option_values.h"
 
 #include <stdio.h>
 #include <stdlib.h>

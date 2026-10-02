@@ -1,6 +1,6 @@
 #include "gamecube/value_morph.h"
 #include "console_common/support/endian.h"
-#include "native_constants.h"
+#include "resources/native_constants.h"
 
 #include <math.h>
 #include <string.h>

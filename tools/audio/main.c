@@ -1,7 +1,7 @@
 #include "gamecube/audio.h"
 #include "console_common/support/endian.h"
-#include "output.h"
-#include "option_values.h"
+#include "support/output.h"
+#include "support/option_values.h"
 
 #include <math.h>
 #include <stdio.h>

@@ -1,5 +1,5 @@
 #include "gamecube/page_transition.h"
-#include "native_constants.h"
+#include "resources/native_constants.h"
 
 #include <string.h>
 
