@@ -128,6 +128,9 @@ typedef struct {
 
 bool gc_scene_init(GcScene *scene, CcPlatform *platform, const char *ipl_path);
 void gc_scene_destroy(GcScene *scene);
+/* Restart presentation counters while retaining decoded resources, artwork,
+ * and host display preferences. No resource decoding or GPU upload occurs. */
+bool gc_scene_reset_presentation(GcScene *scene);
 bool gc_scene_set_cards(GcScene *scene, const gc_card_image cards[2]);
 bool gc_scene_set_disc(GcScene *scene, const GcDisc *disc);
 /* Borrow the recovered random stream for future full-card entrances. */

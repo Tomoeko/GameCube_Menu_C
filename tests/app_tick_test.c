@@ -491,6 +491,88 @@ static void inspect_disc_toggle(AppRuntime *app) {
     assert(app->scene->disc_banner == banner);
 }
 
+static void inspect_startup_restart(AppRuntime *app) {
+    GcAppOptions options = {.inspect_frames = true,
+                            .skip_startup = true,
+                            .delay_start = true,
+                            .timed_start = true,
+                            .startup_delay_seconds = 5};
+    AppPlayback playback = {.running = true};
+    gc_frame_control_init(&playback.frame_control, true);
+    gc_menu_set_disc(app->menu, GC_DISC_ABSENT, NULL, NULL);
+    assert(gc_disc_control_init(&app->runtime->disc, GC_DISC_ABSENT));
+    app->runtime->startup_waiting = true;
+    playback.frame_control.pending_steps = -4;
+    playback.frame_control.fraction = 0.9;
+    uint32_t font = app->scene->font_texture;
+    uint32_t banner = app->scene->disc_banner;
+    GcMesh *cube = app->scene->menu_cube;
+    size_t files[2] = {app->menu->cards[0].file_count, app->menu->cards[1].file_count};
+    uint64_t revision = app->services->revision;
+    assert(restart_startup(app, &options, &playback));
+    assert(app->counter == 0 && app->boot->video_tick == 0 && !app->boot->has_frame);
+    assert(app->menu->page == GC_PAGE_STARTUP && !app->runtime->startup_waiting);
+    assert(playback.frame_control.paused && playback.frame_control.pending_steps == 0 &&
+           playback.frame_control.fraction == 0);
+    assert(gc_frame_history_count(app->history) == 1 &&
+           gc_frame_history_position(app->history) == 0);
+    uint64_t frames[65];
+    frames[0] = gc_software_frame_hash(app->scene->platform);
+    for (unsigned index = 1; index < 65; ++index) {
+        tick(app);
+        frames[index] = gc_software_frame_hash(app->scene->platform);
+    }
+
+    /* Restart from an editor with stale menu/launch/error presentation state. */
+    app->menu->page = GC_PAGE_OPTIONS;
+    app->menu->editing = true;
+    app->menu->settings_before_edit = app->menu->settings;
+    gc_sound sound = app->menu->settings.sound;
+    app->menu->settings.sound =
+        sound == GC_SOUND_STEREO ? GC_SOUND_MONO : GC_SOUND_STEREO;
+    gc_date_time clock = app->menu->clock;
+    assert(launch_presentation(app, GC_PAGE_DISC, 3));
+    app->runtime->launching = true;
+    app->runtime->error.requested = true;
+    app->runtime->pending_error_toggle = app->runtime->pending_disc_toggle = true;
+    app->runtime->input.held = GC_INPUT_A | GC_INPUT_B;
+    app->scene->fatal_error_latched = true;
+    app->scene->card_erasing = true;
+    app->scene->animation_started = true;
+    app->scene->ui_ticks = 12345;
+    playback.frame_control.paused = false;
+    assert(restart_startup(app, &options, &playback));
+    assert(!playback.frame_control.paused && app->counter == 0);
+    assert(app->menu->settings.sound == sound &&
+           !memcmp(&app->menu->clock, &clock, sizeof(clock)));
+    assert(!app->runtime->launching && !app->runtime->launch_menu &&
+           !app->presentations);
+    assert(!app->runtime->input.held && !app->runtime->error.requested &&
+           !app->runtime->pending_error_toggle && !app->runtime->pending_disc_toggle);
+    assert(!app->scene->fatal_error_latched && !app->scene->card_erasing &&
+           !app->scene->animation_started && app->scene->ui_ticks == 0);
+    assert(app->scene->font_texture == font && app->scene->disc_banner == banner &&
+           app->scene->menu_cube == cube);
+    assert(app->services->revision == revision &&
+           app->menu->cards[0].file_count == files[0] &&
+           app->menu->cards[1].file_count == files[1]);
+    assert(gc_software_frame_hash(app->scene->platform) == frames[0]);
+    for (unsigned index = 1; index < 65; ++index) {
+        tick(app);
+        assert(gc_software_frame_hash(app->scene->platform) == frames[index]);
+    }
+    /* The local disc fixture survives a restart with its current pending read. */
+    assert(gc_disc_control_toggle(&app->runtime->disc));
+    gc_disc_control_advance(&app->runtime->disc, 3);
+    GcDiscControl disc = app->runtime->disc;
+    options.startup_sound = 1;
+    assert(restart_startup(app, &options, &playback));
+    assert(!memcmp(&app->runtime->disc, &disc, sizeof(disc)));
+    for (unsigned port = 0; port < GC_BOOT_CONTROLLER_COUNT; ++port)
+        assert(app->runtime->boot_input.controllers[port].valid &&
+               app->runtime->boot_input.controllers[port].held == GC_BOOT_PAD_Z);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2)
         return EXIT_SUCCESS;
@@ -552,6 +634,7 @@ int main(int argc, char **argv) {
     inspect_disc_toggle(&app);
     inspect_error_toggle(&app);
     inspect_realtime_card_stall(&app);
+    inspect_startup_restart(&app);
     gc_frame_history_destroy(history);
     destroy_presentations(app.presentations);
     gc_card_runtime_destroy(&runtime.cards);

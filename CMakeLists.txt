@@ -53,7 +53,7 @@ if(APPLE)
     target_link_libraries(gamecube_core PUBLIC "-framework AudioToolbox")
 endif()
 
-add_library(gamecube_scene STATIC src/render.c src/render_resources.c
+add_library(gamecube_scene STATIC src/render.c src/render_resources.c src/render_state.c
     src/render_mesh.c src/render_layout.c src/render_material.c src/card_runtime.c
     src/frame_history.c)
 target_include_directories(gamecube_scene PUBLIC include PRIVATE src)
@@ -193,6 +193,7 @@ if(BUILD_TESTING)
     target_link_libraries(gc-app-tick-test PRIVATE gamecube_scene gamecube_software)
     gc_test_executable(gc-app-control-test tests/app_control_test.c src/app_options.c)
     target_link_libraries(gc-app-control-test PRIVATE gamecube_scene gamecube_software)
+    add_test(NAME gc-app-window-controls COMMAND gc-app-control-test)
     gc_test_executable(gc-app-options-test tests/app_options_test.c src/app_options.c)
     target_link_libraries(gc-app-options-test PRIVATE gamecube_core)
     add_test(NAME gc-app-options COMMAND gc-app-options-test)

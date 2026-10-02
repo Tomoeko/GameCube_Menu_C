@@ -568,9 +568,59 @@ typedef struct {
     bool running;
     bool history_changed;
     bool start_requested;
+    bool escape_held;
+    bool escape_window_control;
+    bool fullscreen_key_held;
+    bool restart_key_held;
+    bool restart_requested;
     unsigned long frames;
     double last;
 } AppPlayback;
+
+static bool host_control_key(AppRuntime *app, AppPlayback *playback,
+                             const CcEvent *event) {
+    if (event->type != CC_EVENT_KEY_DOWN && event->type != CC_EVENT_KEY_UP)
+        return false;
+    bool down = event->type == CC_EVENT_KEY_DOWN;
+    if (down && event->key_repeat &&
+        (event->key == 'r' || event->key == 'R' || event->key == 'f' ||
+         event->key == 'F' || event->key == CC_KEY_ESCAPE))
+        return true;
+    if (event->key == 'r' || event->key == 'R') {
+        if (down && !playback->restart_key_held)
+            playback->restart_requested = true;
+        playback->restart_key_held = down;
+        return true;
+    }
+    if (event->key == 'f' || event->key == 'F') {
+        bool was_held = playback->fullscreen_key_held;
+        playback->fullscreen_key_held = down;
+        if (down && !was_held)
+            cc_platform_set_fullscreen(
+                app->scene->platform, !cc_platform_is_fullscreen(app->scene->platform));
+        return true;
+    }
+    if (event->key != CC_KEY_ESCAPE)
+        return false;
+    bool was_held = playback->escape_held;
+    playback->escape_held = down;
+    if (!down) {
+        bool consumed = playback->escape_window_control;
+        playback->escape_window_control = false;
+        return consumed;
+    }
+    /* A held Cancel must not become a window shortcut after returning home. */
+    if (was_held)
+        return true;
+    playback->escape_window_control = app->menu->page == GC_PAGE_CUBE &&
+                                      !app->runtime->startup_waiting &&
+                                      !app->menu->launch_requested;
+    if (!playback->escape_window_control)
+        return false;
+    if (cc_platform_is_fullscreen(app->scene->platform))
+        cc_platform_set_fullscreen(app->scene->platform, false);
+    return true;
+}
 
 /* Host events update pending input. Controllers consume it only at video ticks,
  * so paused inspection and restored history retain the same input ordering. */
@@ -601,7 +651,13 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
             playback->frame_control.held_keys = 0;
             app->runtime->disc_toggle_held = false;
             app->runtime->error_toggle_held = false;
+            playback->escape_held = false;
+            playback->escape_window_control = false;
+            playback->fullscreen_key_held = false;
+            playback->restart_key_held = false;
         }
+        if (host_control_key(app, playback, &event))
+            continue;
         bool previous_error_toggle = app->runtime->pending_error_toggle;
         bool previous_error_held = app->runtime->error_toggle_held;
         if (error_test_key(app->runtime, &event)) {
@@ -644,6 +700,61 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
     }
 }
 
+static void initialize_boot_input(GcBootInput *input, gc_disc_status disc,
+                                  unsigned startup_sound) {
+    *input = (GcBootInput){.drive_state = boot_drive(disc)};
+    input->controllers[0].valid = true;
+    if (startup_sound) {
+        unsigned ports = startup_sound == 1 ? GC_BOOT_CONTROLLER_COUNT : 1;
+        for (unsigned port = 0; port < ports; ++port)
+            input->controllers[port] = (GcBootPad){true, GC_BOOT_PAD_Z};
+    }
+}
+
+static bool restart_startup(AppRuntime *app, const GcAppOptions *options,
+                            AppPlayback *playback) {
+    gc_audio_reset(app->audio);
+    gc_frame_history_reset(app->history);
+    destroy_presentations(app->presentations);
+    app->presentations = NULL;
+    gc_card_runtime_destroy(&app->runtime->cards);
+    gc_menu_restart_startup(app->menu);
+    app->boot_config->initial_language = (unsigned)app->menu->settings.language < 6
+                                             ? (unsigned)app->menu->settings.language
+                                             : 0;
+    if (!gc_boot_control_init(app->boot_config, app->boot, GC_BOOT_NORMAL) ||
+        !gc_scene_reset_presentation(app->scene))
+        return false;
+    GcDiscControl disc = app->runtime->disc;
+    GcFaceRandom random = app->runtime->random;
+    *app->runtime = (GcFrameRuntime){.disc = disc, .random = random};
+    gc_error_control_init(&app->runtime->error, true);
+    initialize_boot_input(&app->runtime->boot_input, disc.status,
+                          options->startup_sound);
+    gc_scene_set_boot(app->scene, app->boot_config, app->boot);
+    if (!gc_card_runtime_init(&app->runtime->cards, app->services, app->menu,
+                              app->scene))
+        return false;
+    gc_card_runtime_set_random(&app->runtime->cards, card_random_sample,
+                               &app->runtime->random);
+    gc_scene_set_card_random(app->scene, card_random_sample, &app->runtime->random);
+    if (!update_resources_and_settings(app))
+        return false;
+    app->counter = 0;
+    playback->frame_control.fraction = 0;
+    playback->frame_control.pending_steps = 0;
+    playback->start_requested = false;
+    playback->restart_requested = false;
+    playback->history_changed = false;
+    draw_video_frame(app);
+    if (!save_video_frame(app))
+        return false;
+    ++playback->frames;
+    if (options->frame_limit && playback->frames >= options->frame_limit)
+        playback->running = false;
+    return options->inspect_frames || gc_audio_device_start(app->audio);
+}
+
 static int run_application(AppRuntime *app, const GcAppOptions *options) {
     AppPlayback playback = {.running = true};
     int result = EXIT_SUCCESS;
@@ -671,6 +782,17 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
         }
         double elapsed = now >= playback.last ? now - playback.last : 0;
         playback.last = now;
+        if (!playback.running)
+            break;
+        if (playback.restart_requested) {
+            if (!restart_startup(app, options, &playback) ||
+                !seconds_now(&playback.last)) {
+                fprintf(stderr, "Could not restart startup playback.\n");
+                result = EXIT_FAILURE;
+                break;
+            }
+            continue;
+        }
         if (playback.start_requested) {
             app->runtime->startup_waiting = false;
             playback.history_changed = true;
@@ -680,8 +802,6 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                 break;
             }
         }
-        if (!playback.running)
-            break;
         if (!advance_host_time(app, &playback.frame_control, elapsed)) {
             result = EXIT_FAILURE;
             break;
@@ -835,13 +955,8 @@ int main(int argc, char **argv) {
     GcBootControl boot;
     GcFrameRuntime runtime = {0};
     gc_error_control_init(&runtime.error, menu->page == GC_PAGE_STARTUP);
-    runtime.boot_input.drive_state = boot_drive(menu->disc_status);
-    runtime.boot_input.controllers[0].valid = true;
-    if (options.startup_sound) {
-        unsigned ports = options.startup_sound == 1 ? GC_BOOT_CONTROLLER_COUNT : 1;
-        for (unsigned port = 0; port < ports; port++)
-            runtime.boot_input.controllers[port] = (GcBootPad){true, GC_BOOT_PAD_Z};
-    }
+    initialize_boot_input(&runtime.boot_input, menu->disc_status,
+                          options.startup_sound);
     bool boot_ready = gc_boot_config_init(&boot_config, &scene.startup) &&
                       gc_disc_control_init(&runtime.disc, menu->disc_status);
     if (boot_ready) {

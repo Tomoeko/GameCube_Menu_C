@@ -37,6 +37,8 @@ Files/build/gamecube-menu --help
 ```
 
 Arrow keys select. A/Enter confirms; B/Escape/Backspace cancels; S starts.
+F toggles fullscreen. Escape at the home cube exits fullscreen.
+R restarts startup from frame 0; `--step` keeps its current pause/play state.
 D inserts/ejects test media; E toggles the test error; Z selects the alternate
 startup sound. With `--step`, comma rewinds, period advances, and Space plays/pauses.
 Bare `--delaystart` waits for A, B, or an arrow key.

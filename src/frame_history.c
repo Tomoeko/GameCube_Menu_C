@@ -1,4 +1,5 @@
 #include "gamecube/frame_history.h"
+#include "render_state.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -13,47 +14,9 @@ typedef struct {
     uint8_t after_cards[sizeof(gc_menu) - offsetof(gc_menu, disc_status)];
 } MenuFrame;
 
-#define SCENE_VISUAL_FIELDS(F)                                                         \
-    F(GcTextEncoding, encoding)                                                        \
-    F(gc_language, language)                                                           \
-    F(bool, perspective)                                                               \
-    F(float, camera_y)                                                                 \
-    F(float, pixel_scale_y)                                                            \
-    F(float, display_offset_x)                                                         \
-    F(GcFaceGeometryState, face_geometry_state)                                        \
-    F(GcEditState, edit_state)                                                         \
-    F(GcHelpState, help_state)                                                         \
-    F(GcCardPopups, card_popups)                                                       \
-    F(GcCardUsage, card_usage)                                                         \
-    F(GcCardLighting, card_lighting)                                                   \
-    F(GcCardCells, card_cells)                                                         \
-    F(GcValueMorphState, value_morph_state)                                            \
-    F(uint8_t, disc_metadata_ticks)                                                    \
-    F(uint8_t, test_error_alpha)                                                       \
-    F(uint8_t, fatal_error_ticks)                                                      \
-    F(bool, fatal_error_latched)                                                       \
-    F(uint64_t, ui_ticks)                                                              \
-    F(GcPageTransitions, page_transitions)                                             \
-    F(float, value_alpha)                                                              \
-    F(float, grid_alpha)                                                               \
-    F(float, text_alpha)                                                               \
-    F(bool, help_drawn)                                                                \
-    F(GcMenuAnimation, menu_animation)                                                 \
-    F(GcMenuAnimationPose, menu_pose)                                                  \
-    F(gc_page, animation_page)                                                         \
-    F(double, animation_elapsed)                                                       \
-    F(double, animation_fraction)                                                      \
-    F(bool, animation_started)                                                         \
-    F(uint64_t, card_ticks)                                                            \
-    F(uint8_t, card_erase_tick)                                                        \
-    F(bool, card_erasing)                                                              \
-    F(GcCardOperation, card_operation)                                                 \
-    F(GcFaceGeometryPoint, card_operation_point)                                       \
-    F(bool, card_operation_active)
-
 typedef struct {
 #define DECLARE(type, field) type field;
-    SCENE_VISUAL_FIELDS(DECLARE)
+    GC_SCENE_VISUAL_FIELDS(DECLARE)
 #undef DECLARE
     uint8_t disc_face_ticks[3];
     uint8_t disc_text_ticks[5];
@@ -129,23 +92,12 @@ static void restore_menu(const MenuFrame *frame, gc_menu *menu) {
            sizeof(frame->after_cards));
 }
 
-#define SCENE_ARRAY_FIELDS(F)                                                          \
-    F(disc_face_ticks)                                                                 \
-    F(disc_text_ticks)                                                                 \
-    F(card_selection_ticks)                                                            \
-    F(card_arrow_alpha)                                                                \
-    F(card_erase_matrix)                                                               \
-    F(card_erase_delays)                                                               \
-    F(card_erase_angles)                                                               \
-    F(card_operation_first_rows)                                                       \
-    F(card_operation_centers)
-
 static void save_scene(SceneFrame *frame, const GcScene *scene) {
 #define SAVE(type, field) memcpy(&frame->field, &scene->field, sizeof(frame->field));
-    SCENE_VISUAL_FIELDS(SAVE)
+    GC_SCENE_VISUAL_FIELDS(SAVE)
 #undef SAVE
 #define SAVE_ARRAY(field) memcpy(frame->field, scene->field, sizeof(frame->field));
-    SCENE_ARRAY_FIELDS(SAVE_ARRAY)
+    GC_SCENE_ARRAY_FIELDS(SAVE_ARRAY)
 #undef SAVE_ARRAY
     memset(frame->page_saved, 0, sizeof(frame->page_saved));
     if (scene->page_snapshots) {
@@ -160,10 +112,10 @@ static void save_scene(SceneFrame *frame, const GcScene *scene) {
 
 static void restore_scene(const SceneFrame *frame, GcScene *scene) {
 #define RESTORE(type, field) memcpy(&scene->field, &frame->field, sizeof(frame->field));
-    SCENE_VISUAL_FIELDS(RESTORE)
+    GC_SCENE_VISUAL_FIELDS(RESTORE)
 #undef RESTORE
 #define RESTORE_ARRAY(field) memcpy(scene->field, frame->field, sizeof(frame->field));
-    SCENE_ARRAY_FIELDS(RESTORE_ARRAY)
+    GC_SCENE_ARRAY_FIELDS(RESTORE_ARRAY)
 #undef RESTORE_ARRAY
     if (scene->page_snapshots) {
         for (unsigned page = 0; page < GC_TRANSITION_GROUP_COUNT; ++page) {

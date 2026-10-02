@@ -69,6 +69,15 @@ bool cc_platform_poll(CcPlatform *platform, CcEvent *event) {
     return false;
 }
 
+bool cc_platform_is_fullscreen(CcPlatform *platform) {
+    (void)platform;
+    return false;
+}
+
+bool cc_platform_set_fullscreen(CcPlatform *platform, bool fullscreen) {
+    return platform != NULL && !fullscreen;
+}
+
 void cc_platform_begin(CcPlatform *platform, CcColor clear) {
     if (!platform)
         return;

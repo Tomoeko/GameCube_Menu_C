@@ -1,6 +1,7 @@
 #include "menu_internal.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 void gc_menu_enter_page(gc_menu *menu, gc_page page) {
@@ -55,6 +56,33 @@ void gc_menu_skip_startup(gc_menu *menu) {
         return;
     menu->startup_elapsed = startup_duration(menu);
     gc_menu_enter_page(menu, GC_PAGE_CUBE);
+}
+
+void gc_menu_restart_startup(gc_menu *menu) {
+    if (!menu)
+        return;
+    gc_region region = menu->region;
+    double duration = startup_duration(menu);
+    gc_settings settings = menu->page == GC_PAGE_OPTIONS && menu->editing
+                               ? menu->settings_before_edit
+                               : menu->settings;
+    gc_date_time clock = menu->page == GC_PAGE_CALENDAR && menu->editing
+                             ? menu->clock_before_edit
+                             : menu->clock;
+    double clock_fraction = menu->clock_fraction;
+    /* Card tables and disc metadata remain owned by the live services. */
+    memset(menu, 0, offsetof(gc_menu, cards));
+    menu->region = region;
+    menu->page = GC_PAGE_STARTUP;
+    menu->face = GC_FACE_GAME_PLAY;
+    menu->startup_duration = duration;
+    menu->startup_controlled = true;
+    menu->settings = settings;
+    menu->clock = clock;
+    menu->clock_fraction = clock_fraction;
+    menu->card_action = GC_CARD_ACTION_ERASE;
+    menu->card_window_action = GC_CARD_ACTION_ERASE;
+    menu->launch_requested = false;
 }
 
 bool gc_menu_set_settings(gc_menu *menu, const gc_settings *settings) {

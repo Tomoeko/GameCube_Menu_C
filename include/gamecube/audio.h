@@ -24,6 +24,9 @@ typedef struct {
  */
 GcAudio *gc_audio_create(const char *ipl_path, unsigned sample_rate);
 void gc_audio_destroy(GcAudio *audio);
+/* Stop the host device and restart the mixer/sequence with retained samples.
+ * Call on the host thread; reopen the device when playback should continue. */
+void gc_audio_reset(GcAudio *audio);
 
 /* Native sub_813594e0 event numbers. These queue the recovered track ports.
  * One producer may queue events while one consumer calls gc_audio_render.

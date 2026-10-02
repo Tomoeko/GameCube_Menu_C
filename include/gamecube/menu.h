@@ -183,6 +183,9 @@ typedef struct {
 } gc_menu;
 
 void gc_menu_init(gc_menu *menu, gc_region region);
+/* Local restart preserves the live clock, committed settings and card data,
+ * cancels editor drafts, and returns to the beginning of startup. */
+void gc_menu_restart_startup(gc_menu *menu);
 double gc_region_startup_duration(gc_region region);
 void gc_menu_tick(gc_menu *menu, double elapsed_seconds);
 /* Presentation and RTC have separate host clocks during real-time playback.

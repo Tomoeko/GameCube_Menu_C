@@ -19,7 +19,7 @@ GcAudio *gc_audio_create(const char *ipl_path, unsigned sample_rate) {
     atomic_init(&audio->event_write, 0);
     atomic_init(&audio->mono, false);
     atomic_init(&audio->dropped_events, 0);
-    gc_audio_sequence_init(audio);
+    gc_audio_reset(audio);
     return audio;
 }
 
@@ -31,6 +31,38 @@ void gc_audio_destroy(GcAudio *audio) {
     free(audio);
 }
 
+void gc_audio_reset(GcAudio *audio) {
+    if (!audio)
+        return;
+    gc_audio_device_stop(audio);
+    memset(audio->tracks, 0, sizeof(audio->tracks));
+    memset(audio->voices, 0, sizeof(audio->voices));
+    memset(audio->pending_events, 0, sizeof(audio->pending_events));
+    memset(audio->output_previous, 0, sizeof(audio->output_previous));
+    memset(audio->output_next, 0, sizeof(audio->output_next));
+    memset(audio->surround_delay, 0, sizeof(audio->surround_delay));
+    memset(audio->chorus, 0, sizeof(audio->chorus));
+    for (unsigned index = 0; index < 4; ++index) {
+        GcAudioEffect *effect = &audio->effects[index];
+        memset(effect->history, 0, sizeof(effect->history));
+        memset(effect->delay, 0, sizeof(effect->delay));
+        effect->position = 0;
+    }
+    audio->tick_fraction = 0;
+    audio->update_samples = 0;
+    audio->output_fraction = 0;
+    audio->output_ready = false;
+    audio->chorus_read = audio->sequence_revision ? 150u * 65536u : 0;
+    audio->chorus_direction = audio->sequence_revision ? -1 : 0;
+    audio->chorus_write = audio->chorus_frame = audio->dsp_frame = 0;
+    audio->native_counter = 0;
+    audio->sequence_ticks = audio->notes_started = 0;
+    audio->rejected_commands = 0;
+    atomic_store_explicit(&audio->event_read, 0, memory_order_relaxed);
+    atomic_store_explicit(&audio->event_write, 0, memory_order_relaxed);
+    atomic_store_explicit(&audio->dropped_events, 0, memory_order_relaxed);
+    gc_audio_sequence_init(audio);
+}
 static bool queue_event(GcAudio *audio, unsigned event, float value) {
     if (!audio || event > UINT16_MAX)
         return false;

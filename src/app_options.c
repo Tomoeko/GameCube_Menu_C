@@ -113,6 +113,8 @@ void gc_app_options_usage(FILE *output) {
             "       [--boot-state normal|notice|lost]\n"
             "       [--delaystart [seconds]] (wait for input or a timed delay)\n"
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
+            "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
+            "R restarts startup from frame 0 (preserving the --step pause state).\n"
             "D inserts/ejects local test media (a dummy disc without --disc).\n"
             "E toggles the local fatal-error presentation at any time.\n"
             "--step starts paused: comma back, period forward, Space play/pause.\n");

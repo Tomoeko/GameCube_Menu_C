@@ -718,6 +718,38 @@ static void test_private_ipl(const char *path) {
     gc_audio_destroy(audio);
 }
 
+static void test_audio_restart(const char *path) {
+    GcAudio *fresh = gc_audio_create(path, 48000);
+    GcAudio *reused = gc_audio_create(path, 48000);
+    assert(fresh && reused);
+    int16_t *retained_samples = reused->waves[0].samples;
+    uint8_t *retained_sequence = reused->sequence;
+    float expected[960];
+    float actual[960];
+    assert(gc_audio_menu_begin(reused));
+    for (unsigned block = 0; block < 500; ++block)
+        gc_audio_render(reused, actual, 480);
+    assert(gc_audio_stop_sequence(reused));
+    gc_audio_render(reused, actual, 480);
+    assert(gc_audio_sequence_stopped(reused));
+    assert(gc_audio_event(reused, 13)); /* A queued old cue must also disappear. */
+    gc_audio_set_mono(reused, true);
+    gc_audio_set_mono(fresh, true);
+    gc_audio_reset(reused);
+    assert(reused->waves[0].samples == retained_samples &&
+           reused->sequence == retained_sequence && !reused->device);
+    assert(reused->sequence_ticks == fresh->sequence_ticks &&
+           reused->notes_started == fresh->notes_started);
+    assert(gc_audio_startup_sound(fresh, 0) && gc_audio_startup_sound(reused, 0));
+    for (unsigned block = 0; block < 500; ++block) {
+        gc_audio_render(fresh, expected, 480);
+        gc_audio_render(reused, actual, 480);
+        assert(!memcmp(expected, actual, sizeof(expected)));
+    }
+    gc_audio_destroy(fresh);
+    gc_audio_destroy(reused);
+}
+
 int main(int argc, char **argv) {
     test_residuals_and_history();
     test_clipping_and_bounds();
@@ -737,6 +769,7 @@ int main(int argc, char **argv) {
     if (argc == 2) {
         test_resource_cleanup_and_bounds(argv[1]);
         test_private_ipl(argv[1]);
+        test_audio_restart(argv[1]);
     }
     puts("audio tests passed");
     return 0;
