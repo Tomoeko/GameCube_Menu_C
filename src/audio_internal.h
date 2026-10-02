@@ -1,0 +1,253 @@
+#ifndef GAMECUBE_AUDIO_INTERNAL_H
+#define GAMECUBE_AUDIO_INTERNAL_H
+
+#include "gamecube/audio.h"
+
+#include <stdatomic.h>
+
+#define GC_AUDIO_WAVES 32
+#define GC_AUDIO_TRACKS 64
+#define GC_AUDIO_VOICES 64
+#define GC_AUDIO_REGISTERS 64
+#define GC_AUDIO_SEQUENCE_LIMIT 16384
+#define GC_AUDIO_EVENT_QUEUE 64
+#define GC_AUDIO_ENVELOPE_STEPS 16
+#define GC_AUDIO_DSP_RATE 32028.5
+#define GC_AUDIO_DSP_QUANTUM 80.0
+#define GC_AUDIO_DSP_PITCH_SCALE 4096.0
+#define GC_AUDIO_EFFECT_SAMPLES 8000
+
+typedef struct {
+    uint16_t curve;
+    uint16_t ticks;
+    int16_t value;
+} GcAudioEnvelopeStep;
+
+typedef struct {
+    bool enabled;
+    unsigned target;
+    float rate;
+    float scale;
+    float offset;
+    unsigned attack_count;
+    unsigned release_count;
+    GcAudioEnvelopeStep attack[GC_AUDIO_ENVELOPE_STEPS];
+    GcAudioEnvelopeStep release[GC_AUDIO_ENVELOPE_STEPS];
+} GcAudioEnvelope;
+
+typedef struct {
+    GcAudioEnvelope envelope;
+    unsigned pc;
+    unsigned curve;
+    float remaining;
+    float length;
+    float current;
+    float target;
+    float step;
+    bool held;
+    bool released;
+    bool ended;
+} GcAudioEnvelopeState;
+
+typedef struct {
+    int16_t *samples;
+    size_t count;
+    unsigned rate;
+    unsigned key;
+    unsigned id;
+    bool loop;
+    size_t loop_start;
+    size_t loop_end;
+} GcAudioWave;
+
+typedef struct {
+    uint8_t key;
+    uint8_t velocity;
+    uint16_t wave;
+    float volume;
+    float pitch;
+} GcAudioRegion;
+
+typedef struct {
+    unsigned region_count;
+    GcAudioRegion regions[8];
+    float volume;
+    float pitch;
+    GcAudioEnvelope envelopes[2];
+} GcAudioInstrument;
+
+typedef struct {
+    int16_t current;
+    int16_t product_multiplier;
+    int32_t increment;
+    int64_t accumulator;
+    unsigned frame;
+    bool initialized;
+} GcAudioDspGain;
+
+typedef struct {
+    bool active;
+    unsigned parent;
+    unsigned children[16];
+    unsigned flags;
+    uint32_t id;
+    size_t pc;
+    unsigned wait;
+    size_t stack[16];
+    unsigned repeats[16];
+    unsigned depth;
+    uint16_t registers[GC_AUDIO_REGISTERS];
+    uint16_t ports[16];
+    unsigned port_imported;
+    unsigned port_exported;
+    size_t interrupts[8];
+    unsigned interrupt_mask;
+    unsigned interrupt_pending;
+    bool interrupt_active;
+    size_t saved_pc;
+    unsigned saved_wait;
+    unsigned timer;
+    unsigned timer_period;
+    unsigned timer_count;
+    int transpose;
+    int previous_key;
+    bool tie;
+    unsigned timebase;
+    unsigned time_mode;
+    uint16_t routes[6];
+    GcAudioEnvelope envelopes[2];
+    float parameters[17];
+    float parameter_targets[17];
+    float parameter_steps[17];
+    unsigned parameter_ticks[17];
+} GcAudioTrack;
+
+typedef struct {
+    bool active;
+    unsigned track;
+    unsigned slot;
+    unsigned wave;
+    double position;
+    double step;
+    double base_step;
+    float gain;
+    float base_gain;
+    float pan;
+    float left_scale;
+    float right_scale;
+    float reverb;
+    unsigned buses[6];
+    float bus_scales[6];
+    unsigned duration;
+    GcAudioEnvelopeState envelopes[2];
+    float envelope_volume;
+    float envelope_pitch;
+    float envelope_pan;
+    bool released;
+    GcAudioDspGain dsp_gains[6];
+} GcAudioVoice;
+
+typedef struct {
+    uint16_t number;
+    float value;
+} GcAudioEvent;
+
+typedef struct {
+    unsigned mode;
+    unsigned length;
+    unsigned position;
+    unsigned return_bus[2];
+    int16_t return_gain[2];
+    int16_t filter[8];
+    int16_t history[8];
+    int16_t delay[GC_AUDIO_EFFECT_SAMPLES];
+} GcAudioEffect;
+
+struct GcAudio {
+    unsigned sample_rate;
+    unsigned tempo;
+    unsigned timebase;
+    double tick_fraction;
+    unsigned update_samples;
+    unsigned wave_count;
+    unsigned instrument_count;
+    GcAudioWave waves[GC_AUDIO_WAVES];
+    GcAudioInstrument instruments[128];
+    uint8_t *sequence;
+    size_t sequence_size;
+    unsigned sequence_revision;
+    uint16_t master_gain;
+    uint16_t output_gain;
+    float semitone_ratios[128];
+    float fractional_semitone_ratios[64];
+    int16_t resampling_coefficients[64][4];
+    double output_fraction;
+    float output_previous[2];
+    float output_next[2];
+    bool output_ready;
+    GcAudioEffect effects[4];
+    int16_t chorus[160];
+    uint32_t chorus_read;
+    unsigned chorus_write;
+    unsigned chorus_frame;
+    int chorus_direction;
+    int16_t surround_delay[80];
+    unsigned dsp_frame;
+    GcAudioTrack tracks[GC_AUDIO_TRACKS];
+    GcAudioVoice voices[GC_AUDIO_VOICES];
+    unsigned native_counter;
+    GcAudioEvent pending_events[GC_AUDIO_EVENT_QUEUE];
+    atomic_uint event_read;
+    atomic_uint event_write;
+    atomic_bool mono;
+    atomic_uint dropped_events;
+    atomic_uint active_voices;
+    atomic_bool sequence_stopped;
+    uint64_t sequence_ticks;
+    uint64_t notes_started;
+    uint32_t rejected_commands;
+    void *device;
+};
+
+/* Loading owns decoded samples/sequence; the ROM is borrowed and may be
+ * descrambled in place. Both paths require a zero-initialized audio owner.
+ * Release partial resources after failure before releasing the owner.
+ */
+bool gc_audio_resources_decode(GcAudio *audio, uint8_t *rom, size_t size);
+bool gc_audio_resources_load(GcAudio *audio, const char *ipl_path);
+void gc_audio_resources_release(GcAudio *audio);
+void gc_audio_dsp_render_frame(GcAudio *audio, bool mono, float output[2]);
+
+void gc_audio_sequence_init(GcAudio *audio);
+void gc_audio_sequence_tick(GcAudio *audio);
+void gc_audio_sequence_event(GcAudio *audio, unsigned event);
+void gc_audio_sequence_cube(GcAudio *audio, unsigned direction, float fraction);
+void gc_audio_voice_release(GcAudioVoice *voice);
+void gc_audio_envelope_start(GcAudioEnvelopeState *state,
+                             const GcAudioEnvelope *envelope);
+void gc_audio_envelope_release(GcAudioEnvelopeState *state);
+float gc_audio_envelope_step(GcAudioEnvelopeState *state);
+void gc_audio_voice_envelopes(GcAudioVoice *voice);
+void gc_audio_sequence_envelopes(GcAudio *audio, GcAudioVoice *voice);
+bool gc_audio_envelope_decode_steps(GcAudioEnvelopeStep *steps, unsigned *count,
+                                    const uint8_t *data, size_t size, size_t offset);
+int16_t gc_audio_resample(const GcAudio *audio, const GcAudioWave *wave,
+                          double position);
+int16_t gc_audio_resample_pitch(const GcAudio *audio, const GcAudioWave *wave,
+                                double position, double pitch);
+int16_t gc_audio_dsp_saturate(int64_t sample);
+int16_t gc_audio_dsp_wrap(int64_t sample);
+int64_t gc_audio_dsp_shift(int64_t value, unsigned bits);
+int64_t gc_audio_dsp_round(int64_t value, unsigned bits);
+void gc_audio_dsp_gain_prepare(GcAudioDspGain *gain, int16_t target, bool revised);
+int16_t gc_audio_dsp_gain_mix(GcAudioDspGain *gain, int16_t sample, int16_t bus,
+                              bool revised);
+void gc_audio_effects_begin(GcAudio *audio, int16_t buses[12]);
+void gc_audio_effects_end(GcAudio *audio, int16_t buses[12]);
+int16_t gc_audio_dsp_output(const GcAudio *audio, int16_t sample);
+float gc_audio_route_scale(const GcAudio *audio, const GcAudioVoice *voice,
+                           unsigned route, bool mono);
+float gc_audio_pitch_ratio(const GcAudio *audio, float semitones);
+float gc_audio_bus_gain(const GcAudio *audio, float gain);
+
+#endif
