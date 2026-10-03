@@ -1,4 +1,5 @@
 #include "gamecube/edit_geometry.h"
+#include "console_common/support/endian.h"
 
 #include <assert.h>
 #include <math.h>
@@ -463,6 +464,40 @@ static void test_options_native_parts(const GcEditGeometry *geometry,
     assert(memcmp(&state, &saved, sizeof(state)) == 0);
 }
 
+static void test_pal_resource_languages(const GcText *text,
+                                        const GcEditGeometry *geometry) {
+    if (!text->europe)
+        return;
+    /* Read the original constructor's li/stw pairs, rather than repeating
+     * the runtime's resource IDs. Each destination is a SRAM locale slot. */
+    static const struct {
+        size_t load;
+        size_t store;
+        unsigned register_index;
+    } selectors[6] = {{0xbfd8, 0xc048, 8}, {0xbfe4, 0xc050, 6}, {0xbfe0, 0xc04c, 7},
+                      {0xbff0, 0xc058, 4}, {0xbff8, 0xc05c, 0}, {0xbfec, 0xc054, 5}};
+    GcIplResourceTable table;
+    assert(gc_ipl_resource_table_decode(text->rom, text->rom_size, 0x82040, &table));
+    for (unsigned language = GC_LANGUAGE_ENGLISH; language <= GC_LANGUAGE_DUTCH;
+         ++language) {
+        assert(selectors[language].load <= text->rom_size - 4);
+        assert(selectors[language].store <= text->rom_size - 4);
+        uint32_t load = cc_read_be32(text->rom + selectors[language].load);
+        uint32_t store = cc_read_be32(text->rom + selectors[language].store);
+        assert(load >> 26 == 14 && (load >> 16 & 31) == 0);
+        assert((load >> 21 & 31) == selectors[language].register_index);
+        assert(store >> 26 == 36 && (store >> 16 & 31) == 3);
+        assert((store >> 21 & 31) == selectors[language].register_index);
+        assert((store & 0xffff) == 0x150 + language * 4);
+        GcIplResource original = {0};
+        assert(gc_ipl_resource_unpack(&table, load & 0xffff, &original));
+        assert(geometry->maps[language].byte_count == original.byte_count);
+        assert(memcmp(geometry->maps[language].bytes, original.bytes,
+                      original.byte_count) == 0);
+        gc_ipl_resource_destroy(&original);
+    }
+}
+
 static void test_original_rom(const char *path) {
     GcText text = {0};
     GcEditGeometry geometry = {0};
@@ -472,6 +507,7 @@ static void test_original_rom(const char *path) {
 
     assert(gc_text_load(path, &text));
     assert(gc_edit_geometry_decode(&text, &geometry));
+    test_pal_resource_languages(&text, &geometry);
     assert(!gc_edit_geometry_decode(&text, &geometry));
     assert(geometry.motion.group_count == 5);
     assert(geometry.entrance_ticks == (text.europe ? 58 : 70));

@@ -429,7 +429,9 @@ static bool decode_disc_launch(const GcText *text, GcEditGeometry *geometry,
 bool gc_edit_geometry_decode(const GcText *text, GcEditGeometry *geometry) {
     GcEditGeometry candidate = {0};
     GcIplResourceTable table;
-    static const unsigned europe_maps[6] = {182, 184, 181, 179, 183, 180};
+    /* PAL 0x8130b518 installs MAP resources in the SRAM language order:
+     * English, German, French, Spanish, Italian, Dutch. */
+    static const unsigned europe_maps[6] = {180, 182, 181, 184, 183, 179};
     static const unsigned ntsc_float_offsets[5][3] = {{0x7d88, 0x7d58, 0x7d54},
                                                       {0x7d60, 0x7d4c, 0x7d54},
                                                       {0x7d60, 0x7d48, 0x7d54},

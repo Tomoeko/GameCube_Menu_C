@@ -388,7 +388,8 @@ static void test_native_resources(const char *path) {
         menu.editing = true;
         menu.editor_index = 2;
         menu.settings_before_edit.language = GC_LANGUAGE_ENGLISH;
-        menu.settings.language = GC_LANGUAGE_GERMAN;
+        /* Spanish has a distinct stereo word; English and German share it. */
+        menu.settings.language = GC_LANGUAGE_SPANISH;
         assert(gc_edit_geometry_map_language(&menu) == GC_LANGUAGE_ENGLISH);
         GcEditState editor = {0};
         GcEditPoint points[GC_EDIT_POINT_LIMIT];
@@ -399,8 +400,8 @@ static void test_native_resources(const char *path) {
         for (size_t index = 0; index < count; ++index)
             old_sound += points[index].field == GC_EDIT_SOUND;
         assert(old_sound == 124);
-        menu.settings_before_edit.language = GC_LANGUAGE_GERMAN;
-        assert(gc_edit_geometry_map_language(&menu) == GC_LANGUAGE_GERMAN);
+        menu.settings_before_edit.language = GC_LANGUAGE_SPANISH;
+        assert(gc_edit_geometry_map_language(&menu) == GC_LANGUAGE_SPANISH);
         count = gc_edit_geometry_points_with_state(&geometry, &menu, &editor, points,
                                                    GC_EDIT_POINT_LIMIT);
         size_t committed_sound = 0;
