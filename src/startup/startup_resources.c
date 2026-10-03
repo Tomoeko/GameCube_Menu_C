@@ -220,8 +220,16 @@ static bool find_trail_texture(const uint8_t *rom, GcIplImage *image) {
             continue;
         const uint8_t header[8] = {1, 0, 0, 64, 0, 64, 2, 2};
         if (!memcmp(bytes, header, sizeof(header)) && cc_read_be32(bytes + 28) == 32 &&
-            gc_ipl_texture_decode(bytes, sizeof(bytes), image))
+            gc_ipl_texture_decode(bytes, sizeof(bytes), image)) {
+            /* USA/JAP 0x81301a04 and EUR 0x8130180c use the I8 texture only
+             * for alpha. White RGB lets the basic shader preserve raster color
+             * without multiplying the mask intensity into it a second time. */
+            for (size_t pixel = 0; pixel < (size_t)image->width * image->height;
+                 ++pixel)
+                image->rgba[pixel * 4] = image->rgba[pixel * 4 + 1] =
+                    image->rgba[pixel * 4 + 2] = 255;
             return true;
+        }
     }
     return false;
 }

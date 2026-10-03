@@ -13,6 +13,119 @@ static void draw_at(GcScene *scene, gc_menu *menu, double seconds) {
     gc_scene_draw(scene, menu);
 }
 
+static void native_startup_trails(const GcScene *scene, const GcStartupPose *pose,
+                                  float pixel_scale_y) {
+    const unsigned corners[4] = {0, 1, 3, 2};
+    const float coordinates[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+    /* The original one-stage combiner passes raster RGB and multiplies
+     * raster alpha by texture alpha. Texture intensity cannot darken RGB. */
+    CcMaterialQuad material = {
+        .textures = {scene->trail_texture},
+        .wrap_s = {scene->startup.trail_texture.wrap_s},
+        .wrap_t = {scene->startup.trail_texture.wrap_t},
+        .texture_count = 1,
+        .tev_stages = {{[1] = 4,
+                        [4] = 0xcf,
+                        [5] = 0xfa,
+                        [7] = 1,
+                        [8] = 0x47,
+                        [9] = 0x75,
+                        [11] = 1}},
+        .tev_stage_count = 1,
+        .tev_swap_table = {0xe4, 0xe4, 0xe4, 0xe4},
+        .blend_mode = {1, 4, 5},
+        .has_blend_mode = true,
+    };
+    for (size_t index = 0; index < pose->trail_count; ++index) {
+        const GcStartupTrail *trail = &pose->trails[index];
+        CcColor color = {(float)scene->startup.trail_color[0] / 255,
+                         (float)scene->startup.trail_color[1] / 255,
+                         (float)scene->startup.trail_color[2] / 255,
+                         (float)trail->alpha / 255};
+        for (unsigned corner = 0; corner < 4; ++corner) {
+            float point[3];
+            gc_startup_transform(pose->scene_matrix, trail->positions[corners[corner]],
+                                 point);
+            material.vertices[corner] = (CcMaterialVertex){
+                .x = 322.18f + point[0] * (592.0f / 588.0f),
+                .y = 240 - (point[1] + 55) * pixel_scale_y,
+                .color = color,
+                .uv = {{coordinates[corner][0], coordinates[corner][1]}},
+            };
+        }
+        cc_platform_draw_material_quad(scene->platform, &material);
+    }
+}
+
+static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
+    /* Borrow resources without destroying the copy or changing shared meshes. */
+    GcScene isolated = *scene;
+    isolated.menu_cube = isolated.boot_mark = isolated.boot_base = NULL;
+    isolated.boot_cover = isolated.moving_cube = isolated.logotype = NULL;
+    isolated.boot_config = NULL;
+    isolated.boot_control = NULL;
+    isolated.frame_counter_enabled = false;
+    isolated.test_error_alpha = isolated.fatal_error_ticks = 0;
+    const unsigned samples[4] = {
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
+            4 * scene->startup.roll_ticks,
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
+            12 * scene->startup.roll_ticks,
+        scene->startup.phase_start_ticks[GC_STARTUP_BOUNCE] - 2,
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
+            4 * scene->startup.roll_ticks,
+    };
+    /* A U-only coverage ramp makes transposed coordinates distinguishable
+     * even where the original border mask is nearly symmetric. */
+    uint8_t gradient[16 * 16 * 4];
+    memset(gradient, 255, sizeof(gradient));
+    for (unsigned y = 0; y < 16; ++y)
+        for (unsigned x = 0; x < 16; ++x)
+            gradient[(y * 16 + x) * 4 + 3] = (uint8_t)(x * 255 / 15);
+    uint32_t gradient_texture =
+        cc_platform_create_texture(scene->platform, 16, 16, gradient);
+    assert(gradient_texture);
+    bool pal = scene->startup.frame_rate == 50;
+    float pixel_scale_y = pal ? 520.0f / 448 * (480.0f / 576) : 1;
+    gc_menu_init(menu, pal ? GC_REGION_EUROPE : GC_REGION_USA);
+    uint8_t *actual = malloc((size_t)CC_FRAME_WIDTH * CC_FRAME_HEIGHT * 4);
+    assert(actual);
+    for (unsigned sample = 0; sample < 4; ++sample) {
+        if (sample == 3)
+            isolated.trail_texture = gradient_texture;
+        GcStartupPose pose;
+        assert(gc_startup_sample_menu(&scene->startup, samples[sample], &pose));
+        assert(pose.phase == GC_STARTUP_ROLL && pose.trail_count > 0);
+        assert(!pose.perspective && !pose.menu_labels_alpha);
+        menu->startup_elapsed = (samples[sample] + 0.125) / scene->startup.frame_rate;
+        gc_scene_draw(&isolated, menu);
+        for (unsigned y = 0; y < CC_FRAME_HEIGHT; ++y)
+            for (unsigned x = 0; x < CC_FRAME_WIDTH; ++x) {
+                size_t offset = ((size_t)y * CC_FRAME_WIDTH + x) * 4;
+                assert(gc_software_read_pixel(scene->platform, x, y, actual + offset));
+            }
+        cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
+        native_startup_trails(&isolated, &pose, pixel_scale_y);
+        cc_platform_end(scene->platform);
+        unsigned visible = 0;
+        bool partial = false;
+        for (unsigned y = 0; y < CC_FRAME_HEIGHT; ++y)
+            for (unsigned x = 0; x < CC_FRAME_WIDTH; ++x) {
+                uint8_t expected[4];
+                size_t offset = ((size_t)y * CC_FRAME_WIDTH + x) * 4;
+                assert(gc_software_read_pixel(scene->platform, x, y, expected));
+                for (unsigned channel = 0; channel < 4; ++channel)
+                    assert(abs((int)actual[offset + channel] - expected[channel]) <= 2);
+                visible += expected[2] > 0;
+                partial |=
+                    expected[2] > 0 && expected[2] < scene->startup.trail_color[2];
+            }
+        assert(visible > 100 && partial);
+    }
+    cc_platform_destroy_texture(scene->platform, gradient_texture);
+    free(actual);
+}
+
 static void startup_projection(GcScene *scene, gc_menu *menu) {
     const unsigned samples[] = {1, 2, 15, 30, 31, 45};
     GcBootConfig config;
@@ -320,6 +433,7 @@ int main(int argc, char **argv) {
     assert(platform && menu && gc_scene_init(&scene, platform, argv[1]));
     gc_menu_init(menu,
                  scene.startup.frame_rate == 50 ? GC_REGION_EUROPE : GC_REGION_USA);
+    startup_trail_combiner(&scene, menu);
     startup_projection(&scene, menu);
     page_lifecycle(&scene, menu);
     calendar_captions(&scene, menu);

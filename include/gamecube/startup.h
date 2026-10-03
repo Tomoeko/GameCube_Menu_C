@@ -77,7 +77,7 @@ typedef struct {
     unsigned menu_glass_min_alpha;
     float menu_focus_distance;
     float menu_focus_twist;
-    GcIplImage trail_texture;
+    GcIplImage trail_texture; /* Native I8 coverage, white RGB for raster tint. */
 } GcStartup;
 
 typedef struct {

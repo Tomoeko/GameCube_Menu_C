@@ -1,4 +1,6 @@
 #include "gamecube/startup.h"
+#include "gamecube/texture_collection.h"
+#include "console_common/support/endian.h"
 
 #include <assert.h>
 #include <math.h>
@@ -72,11 +74,57 @@ static void test_synthetic_sequence(void) {
     assert(!gc_startup_sample(&startup, 0, &pose));
 }
 
+static void test_original_trail_mask(const char *path, const GcIplImage *prepared) {
+    GcText text = {0};
+    GcIplResourceTable table;
+    GcIplImage original = {0};
+    unsigned matches = 0;
+    assert(gc_text_load(path, &text));
+    assert(gc_ipl_resource_table_decode(text.rom, text.rom_size,
+                                        text.europe ? 0x82040 : 0x5f240, &table));
+    /* Find the standalone I8 image through resource metadata independently
+     * of the startup loader's compressed-ROM search. */
+    for (unsigned index = 0; index < table.count; ++index) {
+        GcIplResource resource = {0};
+        assert(gc_ipl_resource_unpack(&table, index, &resource));
+        if (resource.byte_count == 32 + 64 * 64 && resource.bytes[0] == 1 &&
+            cc_read_be16(resource.bytes + 2) == 64 &&
+            cc_read_be16(resource.bytes + 4) == 64 &&
+            cc_read_be32(resource.bytes + 28) == 32) {
+            ++matches;
+            assert(matches == 1);
+            assert(
+                gc_ipl_texture_decode(resource.bytes, resource.byte_count, &original));
+        }
+        gc_ipl_resource_destroy(&resource);
+    }
+    assert(matches == 1 && original.rgba);
+    assert(prepared->width == original.width && prepared->height == original.height);
+    assert(prepared->wrap_s == original.wrap_s && prepared->wrap_t == original.wrap_t);
+    bool transparent = false;
+    bool partial = false;
+    bool opaque = false;
+    for (size_t pixel = 0; pixel < (size_t)original.width * original.height; ++pixel) {
+        const uint8_t *native = original.rgba + pixel * 4;
+        const uint8_t *mask = prepared->rgba + pixel * 4;
+        /* The native trail combiner uses I8 as coverage, not as RGB color. */
+        assert(mask[0] == 255 && mask[1] == 255 && mask[2] == 255);
+        assert(mask[3] == native[3]);
+        transparent |= native[3] == 0;
+        partial |= native[3] > 0 && native[3] < 255;
+        opaque |= native[3] == 255;
+    }
+    assert(transparent && partial && opaque);
+    gc_ipl_image_destroy(&original);
+    gc_text_destroy(&text);
+}
+
 static void test_supplied_rom(const char *path) {
     GcStartup startup = {0};
     assert(gc_startup_load(path, &startup));
     assert(startup.step_count == 33 && startup.cube_edge == 54);
     assert(startup.trail_texture.width == 64 && startup.trail_texture.height == 64);
+    test_original_trail_mask(path, &startup.trail_texture);
     assert(startup.trail_color[0] == 100 && startup.trail_color[1] == 80 &&
            startup.trail_color[2] == 190);
     bool pal = startup.frame_rate == 50;
