@@ -181,14 +181,3 @@ void gc_audio_info(const GcAudio *audio, GcAudioInfo *info) {
                           .active_voices = gc_audio_active_voices(audio),
                           .sequence_stopped = gc_audio_sequence_stopped(audio)};
 }
-
-#ifndef __APPLE__
-bool gc_audio_device_start(GcAudio *audio) {
-    (void)audio;
-    return false;
-}
-
-void gc_audio_device_stop(GcAudio *audio) {
-    (void)audio;
-}
-#endif

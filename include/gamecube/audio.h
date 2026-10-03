@@ -72,7 +72,7 @@ void gc_audio_capture_end(GcAudio *audio);
 bool gc_audio_afc_decode(const uint8_t *encoded, size_t encoded_size, int16_t *samples,
                          size_t sample_capacity, int16_t history[2]);
 
-/* Native Apple AudioQueue host. Other hosts may call gc_audio_render directly. */
+/* Shared host output; offline consumers may call gc_audio_render directly. */
 bool gc_audio_device_start(GcAudio *audio);
 void gc_audio_device_stop(GcAudio *audio);
 

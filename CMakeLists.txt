@@ -39,6 +39,7 @@ add_library(gamecube_core STATIC
     src/audio/audio_dsp.c
     src/audio/audio_envelope.c
     src/audio/audio_math.c
+    src/audio/audio_output_device.c
     src/audio/audio_resources.c
     src/audio/audio_sequence.c
     src/audio/navigation_sound.c
@@ -80,7 +81,7 @@ add_library(gamecube_core STATIC
     src/state/state.c
     src/support/option_values.c)
 target_include_directories(gamecube_core PUBLIC include PRIVATE src)
-target_link_libraries(gamecube_core PUBLIC console_common)
+target_link_libraries(gamecube_core PUBLIC console_common PRIVATE console_common_audio)
 gc_warnings(gamecube_core)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     # Ordinary recovered audio operations round separately; explicit fmaf
@@ -92,10 +93,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         src/audio/audio_resources.c
         src/audio/audio_sequence.c
         PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
-endif()
-if(APPLE)
-    target_sources(gamecube_core PRIVATE src/platform/apple/audio_apple.c)
-    target_link_libraries(gamecube_core PUBLIC "-framework AudioToolbox")
 endif()
 
 add_library(gamecube_scene STATIC
@@ -192,11 +189,11 @@ if(BUILD_TESTING)
     target_link_libraries(gc-tool-output-test PRIVATE gamecube_tool_io)
     add_test(NAME gc-tool-output COMMAND gc-tool-output-test)
     gc_test_directory(gc-tool-output tool-output)
-    if(APPLE)
-        gc_test_executable(gc-audio_device-test tests/audio/audio_device_test.c)
-        target_include_directories(gc-audio_device-test PRIVATE include)
-        add_test(NAME gc-audio-device COMMAND gc-audio_device-test)
-    endif()
+    gc_test_executable(gc-audio_device-test tests/audio/audio_device_test.c
+        src/audio/audio_output_device.c)
+    target_include_directories(gc-audio_device-test PRIVATE include
+        Common/include)
+    add_test(NAME gc-audio-device COMMAND gc-audio_device-test)
     foreach(source
         app/error_control app/frame_control app/input_control
         audio/audio audio/audio_control audio/audio_cycle audio/audio_effect
