@@ -6,6 +6,7 @@
 #include "gamecube/ipl_model.h"
 #include "gamecube/texture_collection.h"
 #include "render_material.h"
+#include "render_projection.h"
 
 typedef struct {
     CcMaterialVertex vertices[4];

@@ -248,6 +248,8 @@ if(BUILD_TESTING)
         gamecube_scene gamecube_software)
     add_test(NAME gc-render-material COMMAND gc-render_material-test
         "${CMAKE_BINARY_DIR}/render-material-test.ppm")
+    gc_test_executable(gc-render-projection-test tests/render/render_projection_test.c)
+    add_test(NAME gc-render-projection COMMAND gc-render-projection-test)
     gc_test_executable(gc-scene-test tests/render/scene_test.c)
     target_link_libraries(gc-scene-test PRIVATE gamecube_scene gamecube_software)
     add_test(NAME gc-scene COMMAND gc-scene-test)

@@ -292,9 +292,52 @@ static void test_mesh_material_mask_bounds(void) {
     free(materials);
 }
 
+static void test_frame_sampler(void) {
+    CcPlatform *platform = cc_platform_create("Frame sampler", 640, 480);
+    assert(platform);
+    /* Opaque checker corners expose interpolation across adjacent texels. */
+    uint8_t pixels[16] = {0,   0,   0,   255, 255, 255, 255, 255,
+                          255, 255, 255, 255, 0,   0,   0,   255};
+    uint32_t texture = cc_platform_create_texture(platform, 2, 2, pixels);
+    assert(texture);
+    GcIplImage image = {.width = 2, .height = 2, .rgba = pixels};
+    GcTextureInfo information = {0};
+    GcUiTextures ui = {
+        .native.collection = {.images = &image,
+                              .information = &information,
+                              .count = 1},
+        .collection = &texture,
+    };
+    GcScene scene = {.platform = platform, .ui = &ui, .text_alpha = 1};
+    GcLayoutFrame frame = {.box = {.center_x = 302, .center_y = 234},
+                           .parameters = {[2] = 16 * 16, [3] = 16 * 16}};
+    for (unsigned region = 0; region < 2; ++region) {
+        scene.startup.frame_rate = region ? 50 : 60;
+        scene.pixel_scale_y = gc_render_projection_scale_y(region != 0);
+        for (unsigned projection = 0; projection < 2; ++projection) {
+            scene.perspective = projection != 0;
+            for (unsigned filter = 0; filter < 2; ++filter) {
+                information.min_filter = information.mag_filter = (uint8_t)filter;
+                cc_platform_begin(platform, (CcColor){0, 0, 0, 1});
+                gc_render_layout_frame_value(&scene, GC_LAYOUT_ERROR, &frame,
+                                             UINT32_MAX);
+                uint8_t pixel[4];
+                assert(gc_software_read_pixel(platform, projection ? 321 : 323, 240,
+                                              pixel));
+                if (filter == 0)
+                    assert(pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255);
+                else
+                    assert(pixel[0] > 64 && pixel[0] < 220);
+            }
+        }
+    }
+    cc_platform_destroy(platform);
+}
+
 int main(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : "Files/render-material-test.ppm";
     test_mesh_material_mask_bounds();
+    test_frame_sampler();
     test_stage_modes(path);
     test_negative_alpha(path);
     test_texture_matrix();

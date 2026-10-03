@@ -3,6 +3,7 @@
 #include "audio/audio_internal.h"
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -433,13 +434,14 @@ static void test_native_dsp_sequence_boundaries(void) {
     gc_audio_sequence_init(audio);
     float stereo[2];
     /* At 120*48/25200, the first sequence tick is the fifth DSP update.
-     * The output adapter primes two samples, hence host sample399 below.
+     * Inspect native samples directly so host reconstruction cannot alter
+     * this independent sequencing boundary check.
      */
-    for (unsigned sample = 0; sample < 399; ++sample) {
-        gc_audio_render(audio, stereo, 1);
+    for (unsigned sample = 0; sample < 400; ++sample) {
+        gc_audio_dsp_render_frame(audio, false, stereo);
         assert(audio->sequence_ticks == 0);
     }
-    gc_audio_render(audio, stereo, 1);
+    gc_audio_dsp_render_frame(audio, false, stereo);
     assert(audio->sequence_ticks == 1);
     free(audio);
 }
@@ -634,13 +636,19 @@ static void test_private_ipl(const char *path) {
                    info.sequence_ticks <= ticks + 1);
         }
         gc_audio_set_mono(audio, true);
+        /* The native route change also passes through host reconstruction.
+         * Drain its bounded history before checking the steady mono buses.
+         */
+        gc_audio_render(audio, samples, 480);
         gc_audio_render(audio, samples, 480);
         for (unsigned i = 0; i < 480; ++i)
             /* The native surround copy retains NOT(0) == -1 on the
              * right bus even with mono route gains. Q12 output gain four
              * preserves this four-unit DC difference before host resampling.
+             * Float FIR summation adds a small rounding tolerance.
              */
-            assert(fabsf(samples[i * 2] - samples[i * 2 + 1]) <= 4.0f / 32768);
+            assert(fabsf(samples[i * 2] - samples[i * 2 + 1]) <=
+                   4.0f / 32768 + 8 * FLT_EPSILON);
         gc_audio_destroy(audio);
     }
     for (unsigned event = 3; event < 23; ++event) {

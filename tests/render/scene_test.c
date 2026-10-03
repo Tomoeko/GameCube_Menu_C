@@ -49,8 +49,10 @@ static void native_startup_trails(const GcScene *scene, const GcStartupPose *pos
             gc_startup_transform(pose->scene_matrix, trail->positions[corners[corner]],
                                  point);
             material.vertices[corner] = (CcMaterialVertex){
-                .x = 322.18f + point[0] * (592.0f / 588.0f),
-                .y = 240 - (point[1] + 55) * pixel_scale_y,
+                .x = 24 + ((2 * point[0] + 4) / 588 + 1) * 592.5f / 2,
+                .y = (scene->startup.frame_rate == 50 ? 240 + 0.25f * (480.0f / 576)
+                                                      : 239.75f) -
+                     (point[1] + 55) * pixel_scale_y,
                 .color = color,
                 .uv = {{coordinates[corner][0], coordinates[corner][1]}},
             };
@@ -104,7 +106,7 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
                                    (int)native_mask->height, native_mask->rgba);
     assert(native_texture);
     bool pal = scene->startup.frame_rate == 50;
-    float pixel_scale_y = pal ? 520.0f / 448 * (480.0f / 576) : 1;
+    float pixel_scale_y = pal ? 520.5f / 448 * (480.0f / 576) : 448.5f / 448;
     gc_menu_init(menu, pal ? GC_REGION_EUROPE : GC_REGION_USA);
     uint8_t *actual = malloc((size_t)CC_FRAME_WIDTH * CC_FRAME_HEIGHT * 4);
     assert(actual);

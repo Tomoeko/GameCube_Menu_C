@@ -504,6 +504,13 @@ int main(int argc, char **argv) {
     expected_region = !strcmp(argv[2], "EUR")   ? GC_REGION_EUROPE
                       : !strcmp(argv[2], "JAP") ? GC_REGION_JAPAN
                                                 : GC_REGION_USA;
+    const char *mismatched_region = expected_region == GC_REGION_EUROPE ? "USA" : "EUR";
+    char *mismatched_arguments[] = {
+        "gamecube-menu",           "--ipl", argv[1], "--region",
+        (char *)mismatched_region, "--step"};
+    event_phase = drawn_frames = 0;
+    assert(test_application_main(6, mismatched_arguments) == EXIT_FAILURE);
+    assert(drawn_frames == 0);
     for (unsigned index = 0; index < 3; ++index) {
         assert(gc_config_noinsert_mask(slots[index], &absent_mask));
         event_phase = drawn_frames = 0;

@@ -2,6 +2,7 @@
 #define GAMECUBE_AUDIO_INTERNAL_H
 
 #include "gamecube/audio.h"
+#include "console_common/audio/resampler.h"
 
 #include <stdatomic.h>
 
@@ -219,10 +220,8 @@ struct GcAudio {
     float fractional_semitone_ratios[64];
     float route_sine_table[257];
     int16_t resampling_coefficients[64][4];
-    unsigned output_phase;
-    float output_previous[2];
-    float output_next[2];
-    bool output_ready;
+    CcAudioResampler *output_resampler;
+    CcAudioResampleState *output_state;
     bool render_mono;
     GcAudioEffect effects[4];
     int16_t chorus[160];

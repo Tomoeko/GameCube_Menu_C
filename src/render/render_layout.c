@@ -31,9 +31,9 @@ static int layout_face(GcLayoutGroup group) {
     }
 }
 
-void gc_render_layout_vertices(GcScene *scene, GcLayoutGroup group,
-                               CcDrawVertex vertices[4], uint32_t texture,
-                               bool squared_alpha) {
+static void layout_vertices_sampled(GcScene *scene, GcLayoutGroup group,
+                                    CcDrawVertex vertices[4], uint32_t texture,
+                                    bool squared_alpha, bool nearest) {
     int face = layout_face(group);
     float alpha = face < 0
                       ? 1
@@ -48,6 +48,7 @@ void gc_render_layout_vertices(GcScene *scene, GcLayoutGroup group,
         return;
     float distance = 224.0f / tanf(3.14159265358979323846f / 18);
     CcMaterialQuad material = gc_render_raster_material(texture);
+    material.nearest[0] = nearest;
     /* HELP's 0x81309818 submitter selects raster RGB with texture alpha.
      * Sampling the I4 RGB too darkens the native controller glow twice. */
     if (group == GC_LAYOUT_HELP)
@@ -55,15 +56,16 @@ void gc_render_layout_vertices(GcScene *scene, GcLayoutGroup group,
     for (unsigned index = 0; index < 4; index++) {
         CcDrawVertex *vertex = &vertices[index];
         if (face < 0) {
-            vertex->x += 28;
-            vertex->y = 240 + (vertex->y - 224) * scene->pixel_scale_y;
+            vertex->x = gc_render_projection_x(scene->perspective, vertex->x - 292);
+            vertex->y = gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                        (vertex->y - 224) * scene->pixel_scale_y;
         } else {
             float local[3] = {vertex->x, vertex->y, 0}, point[3];
             gc_startup_transform(scene->menu_pose.pane_matrices[face], local, point);
             float factor = distance / (distance - point[2]);
-            vertex->x = 320 + point[0] * factor;
-            vertex->y =
-                240 - (point[1] - scene->camera_y) * factor * scene->pixel_scale_y;
+            vertex->x = gc_render_projection_x(true, point[0] * factor);
+            vertex->y = gc_render_projection_center_y(scene->startup.frame_rate == 50) -
+                        (point[1] - scene->camera_y) * factor * scene->pixel_scale_y;
             material.vertices[index].depth =
                 10000.0f / 9950 - 500000.0f / (9950 * (distance - point[2]));
             material.vertices[index].clip_w = (distance - point[2]) / distance;
@@ -76,10 +78,16 @@ void gc_render_layout_vertices(GcScene *scene, GcLayoutGroup group,
         material.vertices[index].uv[0][0] = vertex->u;
         material.vertices[index].uv[0][1] = vertex->v;
     }
-    if (face < 0 && group != GC_LAYOUT_HELP)
+    if (face < 0 && group != GC_LAYOUT_HELP && !nearest)
         cc_platform_draw_vertices(scene->platform, vertices, texture);
     else
         cc_platform_draw_material_quad(scene->platform, &material);
+}
+
+void gc_render_layout_vertices(GcScene *scene, GcLayoutGroup group,
+                               CcDrawVertex vertices[4], uint32_t texture,
+                               bool squared_alpha) {
+    layout_vertices_sampled(scene, group, vertices, texture, squared_alpha, false);
 }
 
 float gc_render_layout_line_width(const GcScene *scene, const GcLayoutText *layout,
@@ -282,7 +290,13 @@ void gc_render_layout_frame_value(GcScene *scene, GcLayoutGroup group,
             native.textured && native.texture < scene->ui->native.collection.count
                 ? scene->ui->collection[native.texture]
                 : 0;
-        gc_render_layout_vertices(scene, group, vertices, texture, true);
+        const GcTextureInfo *information =
+            texture && scene->ui->native.collection.information
+                ? &scene->ui->native.collection.information[native.texture]
+                : NULL;
+        bool nearest =
+            information && information->min_filter == 0 && information->mag_filter == 0;
+        layout_vertices_sampled(scene, group, vertices, texture, true, nearest);
     }
 }
 
@@ -337,12 +351,14 @@ void gc_render_card_number(GcScene *scene, unsigned number, const char name[4]) 
         static const unsigned order[4] = {0, 1, 3, 2};
         for (unsigned corner = 0; corner < 4; corner++) {
             const GcLayoutVertex *point = &native[order[corner]];
-            vertices[corner] =
-                (CcDrawVertex){point->x + 28 + scene->display_offset_x,
-                               240 + (point->y - 224) * scene->pixel_scale_y,
-                               point->u,
-                               point->v,
-                               {1, 1, 1, scene->text_alpha}};
+            vertices[corner] = (CcDrawVertex){
+                gc_render_projection_x(scene->perspective, point->x - 292) +
+                    scene->display_offset_x,
+                gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                    (point->y - 224) * scene->pixel_scale_y,
+                point->u,
+                point->v,
+                {1, 1, 1, scene->text_alpha}};
         }
         cc_platform_draw_vertices(scene->platform, vertices, scene->ui->card_numbers);
     }
@@ -390,13 +406,12 @@ void gc_render_grid_lights(GcScene *scene, const GcCardGridLighting *lighting) {
     /* USA 06070 submits the grid BTI's zero min/mag filters (GX_NEAR). */
     tile.nearest[0] = true;
     tile.wrap_s[0] = tile.wrap_t[0] = 1;
-    /* The native plane reaches logical x608, but the active viewport is 592
-     * pixels wide. Its projection adds 4 pixels before the centered 24 pixel
-     * overscan border; the plane origin is therefore 28, not the clip origin.
-     * The spotlight controls visibility inside this viewport. */
-    const CcClipRect clip = {24 + scene->display_offset_x,
-                             240 - 224 * scene->pixel_scale_y, 592,
-                             448 * scene->pixel_scale_y};
+    /* The plane reaches logical x608, beyond the 592-pixel active framebuffer.
+     * Clip there independently of the fractional viewport transform. */
+    const CcClipRect clip = {
+        24 + scene->display_offset_x,
+        scene->startup.frame_rate == 50 ? 28.0f * 480 / 576 : 16, 592,
+        scene->startup.frame_rate == 50 ? 520.0f * 480 / 576 : 448};
     cc_platform_set_clip(scene->platform, &clip);
     for (unsigned index = 0; index < GC_MENU_GRID_COLUMNS * GC_MENU_GRID_ROWS;
          index++) {
@@ -417,11 +432,13 @@ void gc_render_grid_lights(GcScene *scene, const GcCardGridLighting *lighting) {
                 return;
             }
             CcColor color = {rgba[0], rgba[1], rgba[2], rgba[3]};
-            tile.vertices[corner] =
-                (CcMaterialVertex){.x = point->x + 28 + scene->display_offset_x,
-                                   .y = 240 + (point->y - 224) * scene->pixel_scale_y,
-                                   .color = color,
-                                   .uv = {{point->u, point->v}}};
+            tile.vertices[corner] = (CcMaterialVertex){
+                .x = gc_render_projection_x(scene->perspective, point->x - 292) +
+                     scene->display_offset_x,
+                .y = gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                     (point->y - 224) * scene->pixel_scale_y,
+                .color = color,
+                .uv = {{point->u, point->v}}};
         }
         cc_platform_draw_material_quad(scene->platform, &tile);
     }

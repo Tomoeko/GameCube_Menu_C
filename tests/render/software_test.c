@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static CcMaterialQuad material_quad(void) {
@@ -55,6 +56,28 @@ static void set_material_depth(CcMaterialQuad *quad, float depth) {
     quad->depth_mode[0] = 1;
     quad->depth_mode[1] = 3;
     quad->depth_mode[2] = 1;
+}
+
+static void test_color_blend_factors(CcPlatform *platform) {
+    CcMaterialQuad quad = material_quad();
+    quad.tev_stage_count = 0;
+    for (unsigned component = 0; component < 4; ++component)
+        quad.registers[1][component] = 1;
+    set_material_color(&quad, (CcColor){0.8f, 0.3f, 0.6f, 1});
+    quad.blend_mode[0] = 1;
+    const uint8_t factors[][2] = {{0, 2}, {0, 3}, {2, 0}, {3, 0}};
+    const uint8_t expected[][3] = {
+        {41, 46, 31}, {10, 107, 20}, {41, 46, 31}, {163, 31, 122}};
+    for (unsigned index = 0; index < 4; ++index) {
+        quad.blend_mode[1] = factors[index][0];
+        quad.blend_mode[2] = factors[index][1];
+        cc_platform_begin(platform, (CcColor){0.2f, 0.6f, 0.2f, 1});
+        cc_platform_draw_material_quad(platform, &quad);
+        uint8_t rgba[4];
+        assert(gc_software_read_pixel(platform, 0, 0, rgba));
+        for (unsigned component = 0; component < 3; ++component)
+            assert(abs((int)rgba[component] - (int)expected[index][component]) <= 1);
+    }
 }
 
 static void test_coplanar_depth(CcPlatform *platform) {
@@ -533,6 +556,7 @@ int main(int argc, char **argv) {
     cc_platform_draw_material_quad(platform, &quad);
     pixel(platform, path, 0, 0, output);
     assert(output[0] == 255 && !output[1] && !output[2]);
+    test_color_blend_factors(platform);
     test_depth_overlap(platform, path);
     test_depth_comparisons(platform, path);
     test_depth_writes(platform, path);

@@ -164,13 +164,13 @@ void gc_render_mesh_draw(GcScene *scene, GcMesh *mesh, const float scene_matrix[
                                        scene_matrix[row * 4 + 1] * model_reflection[1] +
                                        scene_matrix[row * 4 + 2] * model_reflection[2];
             float factor = 1;
-            float scale_x = 592.0f / 588, scale_y = scene->pixel_scale_y;
+            float scale_x = gc_render_projection_scale_x(scene->perspective);
+            float scale_y = scene->pixel_scale_y;
             if (scene->perspective) {
                 float distance = 224.0f / tanf(3.14159265358979323846f / 18);
                 factor = distance / (distance - position.z);
-                scale_x = 1;
-                x = 320;
-                y = 240;
+                x = gc_render_projection_center_x(true);
+                y = gc_render_projection_center_y(scene->startup.frame_rate == 50);
                 position.y -= scene->camera_y;
             }
             face->vertices[vertex] = (CcMaterialVertex){
@@ -235,7 +235,9 @@ void gc_render_mesh_piece(GcScene *scene, GcMesh *mesh, const float matrix[12],
     for (unsigned color = 0; color < 2; color++)
         for (unsigned channel = 0; channel < 4; channel++)
             mesh->registers[color][channel] = (float)registers[color][channel] / 255;
-    gc_render_mesh_draw(scene, mesh, matrix, model, 322.18f,
-                        240 + scene->camera_y * scene->pixel_scale_y,
+    gc_render_mesh_draw(scene, mesh, matrix, model,
+                        gc_render_projection_center_x(false),
+                        gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                            scene->camera_y * scene->pixel_scale_y,
                         alpha * scene->value_alpha);
 }

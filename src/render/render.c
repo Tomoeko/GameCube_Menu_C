@@ -1331,8 +1331,9 @@ static void startup_trails(GcScene *scene, const GcStartupPose *pose) {
             gc_startup_transform(pose->scene_matrix, trail->positions[order[vertex]],
                                  point);
             vertices[vertex] = (CcDrawVertex){
-                322.18f + point[0] * (592.0f / 588.0f) + scene->display_offset_x,
-                240 - (point[1] - scene->camera_y) * scene->pixel_scale_y,
+                gc_render_projection_x(false, point[0]) + scene->display_offset_x,
+                gc_render_projection_center_y(scene->startup.frame_rate == 50) -
+                    (point[1] - scene->camera_y) * scene->pixel_scale_y,
                 uv[vertex][0], uv[vertex][1], color};
         }
         cc_platform_draw_vertices(scene->platform, vertices, scene->trail_texture);
@@ -1505,7 +1506,8 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
             (float)transition / (float)scene->startup.transition_fade_ticks;
         scene->camera_y += 45 * fminf(1, fraction);
     }
-    float center_y = 240 + scene->camera_y * scene->pixel_scale_y;
+    float center_y = gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                     scene->camera_y * scene->pixel_scale_y;
     float model_scale[12] = {0}, glass_scale[12] = {0}, cover_scale[12] = {0};
     for (unsigned axis = 0; axis < 3; axis++) {
         model_scale[axis * 5] = pose.model_scale[axis];
@@ -1519,16 +1521,19 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
                                &scene->logotype->model);
         gc_ipl_animation_apply(&scene->logotype_colors, pose.logotype_frame,
                                &scene->logotype->model);
-        gc_render_mesh_draw(scene, scene->logotype, identity, identity, 322.18f,
-                            center_y, (float)pose.logotype_alpha / 255);
+        gc_render_mesh_draw(scene, scene->logotype, identity, identity,
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.logotype_alpha / 255);
     }
     if (pose.base_cube_alpha)
         gc_render_mesh_draw(scene, scene->boot_base, pose.scene_matrix, model_scale,
-                            322.18f, center_y, (float)pose.base_cube_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.base_cube_alpha / 255);
     if (pose.cover_cube_alpha) {
         scene->boot_cover->material_mask = 1u << 1;
         gc_render_mesh_draw(scene, scene->boot_cover, pose.scene_matrix, cover_scale,
-                            322.18f, center_y, (float)pose.cover_cube_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.cover_cube_alpha / 255);
     }
     /* Native 0x813104ec draws every trail before submitting the opaque
      * moving cube. Its material disables depth, so reversing this order
@@ -1539,20 +1544,24 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
         memcpy(cube_scene, pose.scene_matrix, sizeof(cube_scene));
         cube_scene[7] += pose.moving_cube_world_y;
         gc_render_mesh_draw(scene, scene->moving_cube, cube_scene, pose.cube_matrix,
-                            322.18f, center_y, (float)pose.moving_cube_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.moving_cube_alpha / 255);
     }
     if (pose.boot_mark_alpha)
         gc_render_mesh_draw(scene, scene->boot_mark, pose.scene_matrix, model_scale,
-                            322.18f, center_y, (float)pose.boot_mark_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.boot_mark_alpha / 255);
     if (pose.cover_cube_alpha) {
         scene->boot_cover->material_mask = 1u << 0;
         gc_render_mesh_draw(scene, scene->boot_cover, pose.scene_matrix, cover_scale,
-                            322.18f, center_y, (float)pose.cover_cube_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.cover_cube_alpha / 255);
         scene->boot_cover->material_mask = 0;
     }
     if (pose.glass_cube_alpha)
         gc_render_mesh_draw(scene, scene->menu_cube, pose.glass_matrix, glass_scale,
-                            322.18f, center_y, (float)pose.glass_cube_alpha / 255);
+                            gc_render_projection_center_x(false), center_y,
+                            (float)pose.glass_cube_alpha / 255);
     startup_menu_labels(scene, menu, &pose);
     boot_ui(scene);
 }
@@ -1717,7 +1726,7 @@ void gc_scene_draw(GcScene *scene, const gc_menu *menu) {
      * 592x520 in a 576-line PAL frame. Preserve overscan borders while
      * fitting either signal to the common 640x480 presentation canvas. */
     scene->pixel_scale_y =
-        menu->region == GC_REGION_EUROPE ? 520.0f / 448 * (480.0f / 576) : 1;
+        gc_render_projection_scale_y(menu->region == GC_REGION_EUROPE);
     scene->perspective = false;
     scene->camera_y = -10;
     scene->display_offset_x = (float)menu->settings.screen_position;

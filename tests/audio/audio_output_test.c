@@ -1,6 +1,7 @@
 #include "audio/audio_internal.h"
 
 #include <assert.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -17,6 +18,10 @@ static GcAudio *test_audio(unsigned rate, int16_t samples[257]) {
     atomic_init(&audio->active_voices, 0);
     atomic_init(&audio->sequence_stopped, true);
     audio->sample_rate = rate;
+    audio->output_resampler = cc_audio_resampler_create(64057, 2, rate);
+    audio->output_state = cc_audio_resample_state_create(
+        cc_audio_resampler_taps(audio->output_resampler));
+    assert(audio->output_resampler && audio->output_state);
     audio->master_gain = 32767;
     audio->output_gain = 4096;
     audio->waves[0] =
@@ -42,32 +47,31 @@ static GcAudio *test_audio(unsigned rate, int16_t samples[257]) {
 
 typedef struct {
     GcAudio *audio;
-    uint64_t phase;
     uint64_t native_frames;
-    float previous[2];
-    float next[2];
+    bool mono;
 } HostReference;
 
 static void reference_begin(HostReference *reference, GcAudio *audio) {
-    *reference = (HostReference){.audio = audio, .native_frames = 2};
-    gc_audio_dsp_render_frame(audio, false, reference->previous);
-    gc_audio_dsp_render_frame(audio, false, reference->next);
+    *reference = (HostReference){.audio = audio};
+}
+
+static bool reference_native_frame(void *context, float output[2]) {
+    HostReference *reference = context;
+    gc_audio_dsp_render_frame(reference->audio, reference->mono, output);
+    ++reference->native_frames;
+    return true;
 }
 
 static void reference_frame(HostReference *reference, float output[2]) {
-    uint64_t denominator = (uint64_t)reference->audio->sample_rate * 2;
-    float fraction = (float)((double)reference->phase / (double)denominator);
-    for (unsigned channel = 0; channel < 2; ++channel) {
-        float difference = reference->next[channel] - reference->previous[channel];
-        output[channel] = fmaf(difference, fraction, reference->previous[channel]);
-    }
-    reference->phase += 64057;
-    while (reference->phase >= denominator) {
-        memcpy(reference->previous, reference->next, sizeof(reference->previous));
-        gc_audio_dsp_render_frame(reference->audio, false, reference->next);
-        reference->phase -= denominator;
-        ++reference->native_frames;
-    }
+    assert(cc_audio_resampler_frame(reference->audio->output_resampler,
+                                    reference->audio->output_state,
+                                    reference_native_frame, reference, output));
+}
+
+static void destroy_test_audio(GcAudio *audio) {
+    cc_audio_resample_state_destroy(audio->output_state);
+    cc_audio_resampler_destroy(audio->output_resampler);
+    free(audio);
 }
 
 static void test_output_clock(unsigned rate, unsigned pattern) {
@@ -101,41 +105,12 @@ static void test_output_clock(unsigned rate, unsigned pattern) {
         }
         completed += count;
     }
-    assert(reference.native_frames == 64059 && reference.phase == 0);
+    assert(reference.native_frames == 64058);
     assert(maximum > 0 && maximum > minimum);
-    assert(audio->output_phase == 0 && audio->update_samples == 59);
+    assert(audio->update_samples == 58);
     assert(audio->voices[0].position == expected_audio->voices[0].position);
-    assert(!memcmp(audio->output_previous, reference.previous,
-                   sizeof(reference.previous)));
-    assert(!memcmp(audio->output_next, reference.next, sizeof(reference.next)));
-    free(expected_audio);
-    free(audio);
-}
-
-static void test_fraction_rounding(void) {
-    /* Division is the independent reference. Reciprocal multiplication may
-     * replace it only when the final binary32 rounding is identical.
-     */
-    const unsigned rates[] = {8000, 11025, 42422, 44100, 48000, 192000};
-    for (unsigned index = 0; index < sizeof(rates) / sizeof(rates[0]); ++index) {
-        unsigned denominator = rates[index] * 2;
-        double reciprocal = 1.0 / denominator;
-        for (unsigned phase = 0; phase < denominator; ++phase)
-            assert((float)((double)phase * reciprocal) ==
-                   (float)((double)phase / denominator));
-    }
-    for (unsigned rate = 8000; rate <= 192000; ++rate) {
-        unsigned denominator = rate * 2;
-        double reciprocal = 1.0 / denominator;
-        for (unsigned index = 0; index < 16; ++index) {
-            unsigned phase = (unsigned)(((uint64_t)denominator * index) / 16);
-            assert((float)((double)phase * reciprocal) ==
-                   (float)((double)phase / denominator));
-            if (phase)
-                assert((float)((double)(phase - 1) * reciprocal) ==
-                       (float)((double)(phase - 1) / denominator));
-        }
-    }
+    destroy_test_audio(expected_audio);
+    destroy_test_audio(audio);
 }
 
 static void test_chunks_and_reset(void) {
@@ -157,24 +132,68 @@ static void test_chunks_and_reset(void) {
         frame += count;
     }
     assert(!memcmp(expected, actual, frames * 2 * sizeof(*actual)));
-    assert(single->output_phase == chunked->output_phase);
+    assert(single->voices[0].position == chunked->voices[0].position);
     gc_audio_render(chunked, NULL, 1);
     gc_audio_render(chunked, actual, 0);
-    assert(chunked->output_phase == 0 && chunked->output_ready);
+    double position = chunked->voices[0].position;
     actual[0] = 1;
     gc_audio_render(chunked, actual, SIZE_MAX);
-    assert(actual[0] == 1 && chunked->output_phase == 0);
-    gc_audio_render(chunked, actual, 1);
-    assert(chunked->output_phase != 0);
+    assert(actual[0] == 1 && chunked->voices[0].position == position);
+    gc_audio_render(chunked, actual, 2);
+    assert(chunked->voices[0].position > position);
     gc_audio_reset(chunked);
-    assert(chunked->output_phase == 0 && !chunked->output_ready);
-    assert(chunked->output_previous[0] == 0 && chunked->output_next[0] == 0);
+    assert(chunked->update_samples == 0);
     gc_audio_render(NULL, actual, 1);
     assert(actual[0] == 0 && actual[1] == 0);
     free(actual);
     free(expected);
-    free(chunked);
-    free(single);
+    destroy_test_audio(chunked);
+    destroy_test_audio(single);
+}
+
+static void test_mono_transition(void) {
+    int16_t samples[257];
+    for (size_t index = 0; index < 257; ++index)
+        samples[index] = 12000;
+    GcAudio *audio = test_audio(48000, samples);
+    GcAudio *native = test_audio(48000, samples);
+    GcAudio *fixtures[] = {audio, native};
+    for (size_t index = 0; index < 2; ++index) {
+        GcAudioVoice *voice = &fixtures[index]->voices[0];
+        voice->buses[1] = 2;
+        voice->routes[0] = 0x14;
+        voice->routes[1] = 0x24;
+        voice->pan_weights[1] = 0;
+        voice->pan_weights[2] = 1;
+        assert(gc_audio_route_scale(fixtures[index], voice, 0, false) == 1);
+        assert(gc_audio_route_scale(fixtures[index], voice, 1, false) == 0);
+        assert(gc_audio_route_scale(fixtures[index], voice, 0, true) ==
+               gc_audio_route_scale(fixtures[index], voice, 1, true));
+    }
+    HostReference reference;
+    reference_begin(&reference, native);
+    float actual[1024], expected[2];
+    for (size_t phase = 0; phase < 3; ++phase) {
+        if (phase == 1) {
+            gc_audio_set_mono(audio, true);
+            reference.mono = true;
+        }
+        gc_audio_render(audio, actual, 512);
+        for (size_t frame = 0; frame < 512; ++frame) {
+            reference_frame(&reference, expected);
+            assert(!memcmp(actual + frame * 2, expected, sizeof(expected)));
+            if (phase == 2)
+                assert(fabsf(actual[frame * 2] - actual[frame * 2 + 1]) <
+                       4.0f / 32768 + 8 * FLT_EPSILON);
+        }
+        /* A route update changes native gains; reconstruction preserves its
+         * causal history rather than replacing already queued stereo samples.
+         */
+        if (phase == 1)
+            assert(actual[0] > actual[1] + 0.01f);
+    }
+    destroy_test_audio(native);
+    destroy_test_audio(audio);
 }
 
 static void test_capture_wrapping(void) {
@@ -224,7 +243,7 @@ static void test_capture_wrapping(void) {
     gc_audio_capture_end(audio);
     gc_audio_capture_end(audio);
     assert(!gc_audio_capture_failed(audio));
-    free(audio);
+    destroy_test_audio(audio);
 }
 
 static void test_capture_overflow_and_reset(void) {
@@ -263,13 +282,12 @@ static void test_capture_overflow_and_reset(void) {
     assert(first_sample == 4 && !memcmp(rendered + 8, captured, 4 * sizeof(float)));
     assert(!gc_audio_capture_failed(audio));
     gc_audio_capture_end(audio);
-    free(reference);
-    free(audio);
+    destroy_test_audio(reference);
+    destroy_test_audio(audio);
 }
 
 int main(void) {
     assert(gc_audio_sample_rate(NULL) == 0);
-    test_fraction_rounding();
     const unsigned rates[] = {8000,  11025, 22050, 32000, 42422,
                               44100, 48000, 96000, 192000};
     for (unsigned index = 0; index < sizeof(rates) / sizeof(rates[0]); ++index)
@@ -277,6 +295,7 @@ int main(void) {
     test_output_clock(48000, 1);
     test_output_clock(48000, 2);
     test_chunks_and_reset();
+    test_mono_transition();
     test_capture_wrapping();
     test_capture_overflow_and_reset();
     puts("Host audio output tests passed.");

@@ -1017,6 +1017,20 @@ int main(int argc, char **argv) {
         free(menu);
         return EXIT_FAILURE;
     }
+    /* PAL assets supply a different clock, projection and language set.
+     * Mixing them with an NTSC menu would silently select incompatible data.
+     */
+    if (scene.native_text.europe != (options.region == GC_REGION_EUROPE)) {
+        fprintf(stderr,
+                "The selected region does not match the IPL resource profile.\n");
+        gc_scene_destroy(&scene);
+        cc_platform_destroy(platform);
+        gc_services_destroy(services);
+        gc_disc_destroy(&disc);
+        free(services);
+        free(menu);
+        return EXIT_FAILURE;
+    }
     menu->startup_duration =
         (double)scene.startup.menu_ticks / scene.startup.frame_rate;
     GcBootConfig boot_config;

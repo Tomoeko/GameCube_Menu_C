@@ -149,16 +149,19 @@ static bool compare_depth(unsigned kind, float value, float stored) {
 }
 
 static float blend_factor(unsigned kind, unsigned component, const CcColor *source,
-                          const float destination[4]) {
+                          const float destination[4], bool destination_factor) {
+    const float source_color[4] = {source->r, source->g, source->b, source->a};
     switch (kind) {
         case 0:
             return 0;
         case 1:
             return 1;
         case 2:
-            return destination[component];
+            return destination_factor ? source_color[component]
+                                      : destination[component];
         case 3:
-            return 1 - destination[component];
+            return 1 - (destination_factor ? source_color[component]
+                                           : destination[component]);
         case 4:
             return source->a;
         case 5:
@@ -178,10 +181,10 @@ static void blend_pixel(uint8_t pixel[4], CcColor color, const CcMaterialBlend *
     for (unsigned component = 0; component < 3; ++component) {
         float value = source[component];
         if (blend->enabled)
-            value =
-                value * blend_factor(blend->source, component, &color, destination) +
-                destination[component] *
-                    blend_factor(blend->destination, component, &color, destination);
+            value = value * blend_factor(blend->source, component, &color, destination,
+                                         false) +
+                    destination[component] * blend_factor(blend->destination, component,
+                                                          &color, destination, true);
         pixel[component] = channel(value);
     }
     pixel[3] =

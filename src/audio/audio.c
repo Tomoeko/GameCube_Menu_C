@@ -16,6 +16,13 @@ GcAudio *gc_audio_create(const char *ipl_path, unsigned sample_rate) {
         return NULL;
     }
     audio->sample_rate = sample_rate;
+    audio->output_resampler = cc_audio_resampler_create(64057, 2, sample_rate);
+    audio->output_state = cc_audio_resample_state_create(
+        cc_audio_resampler_taps(audio->output_resampler));
+    if (!audio->output_resampler || !audio->output_state) {
+        gc_audio_destroy(audio);
+        return NULL;
+    }
     atomic_init(&audio->event_read, 0);
     atomic_init(&audio->event_write, 0);
     atomic_init(&audio->mono, false);
@@ -30,6 +37,8 @@ void gc_audio_destroy(GcAudio *audio) {
     gc_audio_device_stop(audio);
     gc_audio_capture_end(audio);
     gc_audio_resources_release(audio);
+    cc_audio_resample_state_destroy(audio->output_state);
+    cc_audio_resampler_destroy(audio->output_resampler);
     free(audio);
 }
 
@@ -40,8 +49,7 @@ void gc_audio_reset(GcAudio *audio) {
     memset(audio->tracks, 0, sizeof(audio->tracks));
     memset(audio->voices, 0, sizeof(audio->voices));
     memset(audio->pending_events, 0, sizeof(audio->pending_events));
-    memset(audio->output_previous, 0, sizeof(audio->output_previous));
-    memset(audio->output_next, 0, sizeof(audio->output_next));
+    cc_audio_resample_state_reset(audio->output_state);
     memset(audio->surround_delay, 0, sizeof(audio->surround_delay));
     memset(audio->chorus, 0, sizeof(audio->chorus));
     for (unsigned index = 0; index < 4; ++index) {
@@ -52,8 +60,6 @@ void gc_audio_reset(GcAudio *audio) {
     }
     audio->tick_fraction = 0;
     audio->update_samples = 0;
-    audio->output_phase = 0;
-    audio->output_ready = false;
     audio->chorus_read = audio->sequence_revision ? 150u * 65536u : 0;
     audio->chorus_direction = audio->sequence_revision ? -1 : 0;
     audio->chorus_write = audio->chorus_frame = audio->dsp_frame = 0;
@@ -124,43 +130,31 @@ void gc_audio_set_mono(GcAudio *audio, bool mono) {
         atomic_store_explicit(&audio->mono, mono, memory_order_relaxed);
 }
 
+typedef struct {
+    GcAudio *audio;
+    bool mono;
+} NativeOutput;
+
+static bool native_output_frame(void *context, float stereo[2]) {
+    NativeOutput *output = context;
+    gc_audio_dsp_render_frame(output->audio, output->mono, stereo);
+    return true;
+}
+
 void gc_audio_render(GcAudio *audio, float *stereo, size_t frames) {
     if (!stereo || frames > SIZE_MAX / (2 * sizeof(*stereo)))
         return;
     memset(stereo, 0, frames * 2 * sizeof(*stereo));
     if (!audio || !frames)
         return;
-    bool mono = atomic_load_explicit(&audio->mono, memory_order_relaxed);
-    unsigned denominator = audio->sample_rate * 2;
-    double phase_scale = 1.0 / denominator;
-    if (!audio->output_ready) {
-        gc_audio_dsp_render_frame(audio, mono, audio->output_previous);
-        gc_audio_dsp_render_frame(audio, mono, audio->output_next);
-        audio->output_ready = true;
-    }
-    for (size_t frame = 0; frame < frames; ++frame) {
-        /* The firmware mixes at its DAC clock. This final linear conversion
-         * adapts that stream to the host's requested rate, outside the DSP.
-         */
-        float fraction = (float)((double)audio->output_phase * phase_scale);
-        for (unsigned channel = 0; channel < 2; ++channel) {
-            float difference =
-                audio->output_next[channel] - audio->output_previous[channel];
-            stereo[frame * 2 + channel] =
-                fmaf(difference, fraction, audio->output_previous[channel]);
-        }
-        /* The native DAC clock is exactly 64057/2 in the recovered setup.
-         * Integer phase avoids rounding away a source-frame boundary. Valid
-         * host rates keep this accumulator below 448057, including its step.
-         */
-        audio->output_phase += 64057;
-        while (audio->output_phase >= denominator) {
-            memcpy(audio->output_previous, audio->output_next,
-                   sizeof(audio->output_previous));
-            gc_audio_dsp_render_frame(audio, mono, audio->output_next);
-            audio->output_phase -= denominator;
-        }
-    }
+    NativeOutput output = {audio,
+                           atomic_load_explicit(&audio->mono, memory_order_relaxed)};
+    /* Preserve the recovered 64057/2 DAC clock and fixed-point DSP buses.
+     * Only host reconstruction changes. Its causal delay (~3 ms at 48 kHz)
+     * is identical in device output and the captured recording stream.
+     */
+    cc_audio_resampler_render(audio->output_resampler, audio->output_state,
+                              native_output_frame, &output, stereo, frames);
     unsigned active = 0;
     for (unsigned voice = 0; voice < GC_AUDIO_VOICES; ++voice)
         active += audio->voices[voice].active ? 1u : 0u;
