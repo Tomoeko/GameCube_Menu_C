@@ -1,4 +1,5 @@
 #include "gamecube/texture_collection.h"
+#include "console_common/support/endian.h"
 #include "gamecube/ipl_model.h"
 
 #include <assert.h>
@@ -135,6 +136,96 @@ static void test_native_grid(void) {
     assert(memcmp(saved, vertices, sizeof(saved)) == 0);
 }
 
+typedef struct {
+    size_t load;
+    size_t store;
+    unsigned register_index;
+} NativeTextureSelector;
+
+static unsigned native_texture_resource(const GcText *text,
+                                        const NativeTextureSelector *selector,
+                                        unsigned base_register, int displacement) {
+    assert(text->rom_size >= 4 && selector->load <= text->rom_size - 4 &&
+           selector->store <= text->rom_size - 4);
+    uint32_t load = cc_read_be32(text->rom + selector->load);
+    uint32_t store = cc_read_be32(text->rom + selector->store);
+    assert(load >> 26 == 14 && (load >> 16 & 31) == 0);
+    assert((load >> 21 & 31) == selector->register_index);
+    assert(store >> 26 == 36 && (store >> 16 & 31) == base_register);
+    assert((store >> 21 & 31) == selector->register_index);
+    assert((store & 0xffff) == (uint16_t)displacement);
+    return load & 0xffff;
+}
+
+static void check_original_texture(const GcIplResourceTable *table, unsigned resource,
+                                   const GcIplImage *decoded) {
+    GcIplResource packed = {0};
+    GcIplImage original = {0};
+    assert(gc_ipl_resource_unpack(table, resource, &packed));
+    assert(gc_ipl_texture_decode(packed.bytes, packed.byte_count, &original));
+    assert(original.width == decoded->width && original.height == decoded->height);
+    assert(!memcmp(original.rgba, decoded->rgba,
+                   (size_t)original.width * original.height * 4));
+    gc_ipl_image_destroy(&original);
+    gc_ipl_resource_destroy(&packed);
+}
+
+static void test_native_localized_textures(const GcText *text,
+                                           const GcMenuTextures *textures) {
+    /* Original constructor li/stw pairs, not a second copy of resource IDs.
+     * PAL 0x8130b518 tables use SRAM order; NTSC 0x8130b3ec branches on
+     * English/Japanese. Groups are weekday, mono, stereo. */
+    static const NativeTextureSelector pal[3][6] = {{{0xbf6c, 0xc000, 18},
+                                                     {0xbf78, 0xc008, 20},
+                                                     {0xbf74, 0xc004, 19},
+                                                     {0xbf84, 0xc010, 22},
+                                                     {0xbf8c, 0xc014, 23},
+                                                     {0xbf80, 0xc00c, 21}},
+                                                    {{0xbf90, 0xc018, 24},
+                                                     {0xbf9c, 0xc020, 26},
+                                                     {0xbf98, 0xc01c, 25},
+                                                     {0xbfa8, 0xc028, 28},
+                                                     {0xbfb0, 0xc02c, 29},
+                                                     {0xbfa4, 0xc024, 27}},
+                                                    {{0xbfb4, 0xc030, 30},
+                                                     {0xbfc0, 0xc038, 12},
+                                                     {0xbfbc, 0xc034, 31},
+                                                     {0xbfcc, 0xc040, 10},
+                                                     {0xbfd4, 0xc044, 9},
+                                                     {0xbfc8, 0xc03c, 11}}};
+    static const NativeTextureSelector ntsc[3][2] = {
+        {{0xbd60, 0xbd9c, 6}, {0xbc94, 0xbcd0, 6}},
+        {{0xbd68, 0xbda0, 5}, {0xbc9c, 0xbcd4, 5}},
+        {{0xbd6c, 0xbda4, 4}, {0xbca0, 0xbcd8, 4}}};
+    GcIplResourceTable table;
+    assert(gc_ipl_resource_table_decode(text->rom, text->rom_size,
+                                        text->europe ? 0x82040 : 0x5f240, &table));
+    for (unsigned language = 0; language < 7; ++language) {
+        if (!textures->weekdays[language][0].rgba)
+            continue;
+        for (unsigned group = 0; group < 3; ++group) {
+            unsigned resource;
+            if (text->europe) {
+                int displacement = (int)(0x108 + group * 0x18 + language * 4);
+                resource = native_texture_resource(text, &pal[group][language], 3,
+                                                   displacement);
+            } else {
+                unsigned slot = language == GC_LANGUAGE_JAPANESE ? 1 : 0;
+                resource = native_texture_resource(text, &ntsc[group][slot], 13,
+                                                   -31868 + (int)group * 4);
+            }
+            if (group == 0) {
+                for (unsigned day = 0; day < 7; ++day)
+                    check_original_texture(&table, resource + day,
+                                           &textures->weekdays[language][day]);
+            } else {
+                check_original_texture(&table, resource,
+                                       &textures->sound[language][group - 1]);
+            }
+        }
+    }
+}
+
 static void test_original_rom(const char *path) {
     GcText text = {0};
     GcLayouts layouts;
@@ -147,6 +238,7 @@ static void test_original_rom(const char *path) {
     assert(gc_text_load(path, &text));
     assert(gc_layouts_index(&text, &layouts));
     assert(gc_menu_textures_decode(&text, &textures));
+    test_native_localized_textures(&text, &textures);
     assert(textures.collection.count == (text.europe ? 97 : 42));
     assert(textures.grid.width == 8 && textures.grid.height == 8);
     assert(textures.card_numbers.width == 110 && textures.card_numbers.height == 14);
@@ -207,35 +299,11 @@ static void test_original_rom(const char *path) {
         assert(
             gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_CALENDAR_FACE, &pane) ==
             &textures.weekdays[language][4]); /* Leap-day Thursday. */
-        menu.clock = (gc_date_time){2026, 10, 1, 12, 34, 56};
-        assert(gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_CALENDAR_FACE,
-                                     &pane) == &textures.weekdays[language][4]);
-        menu.clock.day = 2;
-        assert(gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_CALENDAR_FACE,
-                                     &pane) == &textures.weekdays[language][5]);
-        /* The native PAL initializer's language pools are not sequential.
-         * Verify English/German Thursday and Friday against the original
-         * resource indices at 0x8130b518; NTSC 0x8130b3ec uses English31. */
-        if (language == GC_LANGUAGE_ENGLISH || language == GC_LANGUAGE_GERMAN) {
-            unsigned base =
-                text.europe ? (language == GC_LANGUAGE_ENGLISH ? 71u : 171u) : 31u;
-            GcIplResourceTable resources;
-            assert(gc_ipl_resource_table_decode(
-                text.rom, text.rom_size, text.europe ? 0x82040 : 0x5f240, &resources));
-            for (unsigned weekday = 4; weekday <= 5; ++weekday) {
-                GcIplResource resource = {0};
-                GcIplImage original = {0};
-                assert(gc_ipl_resource_unpack(&resources, base + weekday, &resource));
-                assert(gc_ipl_texture_decode(resource.bytes, resource.byte_count,
-                                             &original));
-                const GcIplImage *decoded = &textures.weekdays[language][weekday];
-                assert(original.width == decoded->width &&
-                       original.height == decoded->height);
-                assert(!memcmp(original.rgba, decoded->rgba,
-                               (size_t)original.width * original.height * 4));
-                gc_ipl_image_destroy(&original);
-                gc_ipl_resource_destroy(&resource);
-            }
+        for (unsigned day = 0; day < 7; ++day) {
+            menu.clock = (gc_date_time){2026, 10, 4 + (int)day, 12, 34, 56};
+            assert(gc_date_time_weekday(&menu.clock) == day);
+            assert(gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_CALENDAR_FACE,
+                                         &pane) == &textures.weekdays[language][day]);
         }
         const GcLayoutTable *options =
             gc_layout_table(&layouts, (gc_language)language, GC_LAYOUT_OPTIONS_FACE);
@@ -248,8 +316,11 @@ static void test_original_rom(const char *path) {
         menu.settings.screen_position = 32;
         assert(!gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_OPTIONS_FACE, &pane));
         assert(gc_layout_find_pane(options, "sond", 0, &pane));
-        assert(gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_OPTIONS_FACE, &pane) ==
-               &textures.sound[language][GC_SOUND_STEREO]);
+        for (unsigned mode = 0; mode < 2; ++mode) {
+            menu.settings.sound = (gc_sound)mode;
+            assert(gc_menu_textures_pane(&textures, &menu, GC_LAYOUT_OPTIONS_FACE,
+                                         &pane) == &textures.sound[language][mode]);
+        }
     }
     assert(gc_menu_card_number_quad(&textures, 101, 231, 46, 0, vertices));
     assert(vertices[0].x == 214 && vertices[0].y == 39);

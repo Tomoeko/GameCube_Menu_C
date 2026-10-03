@@ -193,9 +193,13 @@ bool gc_menu_textures_decode(const GcText *text, GcMenuTextures *textures) {
     unsigned grid_index;
     /* Resource indices recovered from USA 0x8130b3ec, EUR 0x8130b518.
      * Only metadata is compiled; original image data is read from the IPL. */
-    static const unsigned europe_weekday[6] = {71, 171, 62, 40, 80, 49};
-    static const unsigned europe_sound[6][2] = {{69, 70}, {169, 170}, {60, 61},
-                                                {38, 39}, {78, 79},   {47, 48}};
+    static const struct {
+        unsigned weekday_base;
+        unsigned sound_base;
+    } europe_resources[6] = {
+        [GC_LANGUAGE_ENGLISH] = {49, 47}, [GC_LANGUAGE_GERMAN] = {71, 69},
+        [GC_LANGUAGE_FRENCH] = {62, 60},  [GC_LANGUAGE_SPANISH] = {171, 169},
+        [GC_LANGUAGE_ITALIAN] = {80, 78}, [GC_LANGUAGE_DUTCH] = {40, 38}};
 
     if (!text || !text->rom || !textures || textures->collection.images ||
         textures->grid.rgba || textures->digits[0].rgba)
@@ -226,8 +230,8 @@ bool gc_menu_textures_decode(const GcText *text, GcMenuTextures *textures) {
         if (text->europe) {
             if (language == GC_LANGUAGE_JAPANESE)
                 continue;
-            weekday_base = europe_weekday[language];
-            sound_base = europe_sound[language][GC_SOUND_MONO];
+            weekday_base = europe_resources[language].weekday_base;
+            sound_base = europe_resources[language].sound_base;
         } else {
             if (language != GC_LANGUAGE_ENGLISH && language != GC_LANGUAGE_JAPANESE)
                 continue;
