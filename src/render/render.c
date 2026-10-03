@@ -1316,7 +1316,8 @@ static void full_page_layers(GcScene *scene) {
 static void startup_trails(GcScene *scene, const GcStartupPose *pose) {
     static const unsigned order[4] = {0, 1, 3, 2};
     /* Native USA/JAP 0x81310198 and EUR 0x81310ad0 pair cell X with V
-     * and cell Y with U. The original border mask is not symmetric. */
+     * and cell Y with U. The uploaded tile contains the full mirrored
+     * 0..2 mask period, so its coordinates are normalized here. */
     const float uv[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
     for (size_t index = 0; index < pose->trail_count; index++) {
         const GcStartupTrail *trail = &pose->trails[index];

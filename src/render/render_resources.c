@@ -20,6 +20,33 @@ static uint32_t upload_image(GcScene *scene, const GcIplImage *image) {
                        : 0;
 }
 
+static uint32_t upload_startup_trail(GcScene *scene) {
+    const GcIplImage *image = &scene->startup.trail_texture;
+    enum { QUARTER_EDGE = 64, TILE_EDGE = QUARTER_EDGE * 2 };
+    if (!image->rgba || image->width != QUARTER_EDGE || image->height != QUARTER_EDGE ||
+        image->wrap_s != 2 || image->wrap_t != 2)
+        return 0;
+    uint8_t *pixels = malloc((size_t)TILE_EDGE * TILE_EDGE * 4);
+    if (!pixels)
+        return 0;
+    /* USA/JAP 0x8131054c and EUR 0x81310e84 set TEX0 to S16/13:
+     * emitted 0x4000 means 2.0. Bake its mirrored quarter-mask period
+     * once so the basic GLES2/Metal path can use normalized clamp UVs. */
+    for (unsigned y = 0; y < TILE_EDGE; ++y) {
+        unsigned source_y = y < QUARTER_EDGE ? y : TILE_EDGE - 1 - y;
+        for (unsigned x = 0; x < TILE_EDGE; ++x) {
+            unsigned source_x = x < QUARTER_EDGE ? x : TILE_EDGE - 1 - x;
+            size_t destination = ((size_t)y * TILE_EDGE + x) * 4;
+            size_t source = ((size_t)source_y * QUARTER_EDGE + source_x) * 4;
+            memcpy(pixels + destination, image->rgba + source, 4);
+        }
+    }
+    uint32_t texture =
+        cc_platform_create_texture(scene->platform, TILE_EDGE, TILE_EDGE, pixels);
+    free(pixels);
+    return texture;
+}
+
 static void ui_textures_destroy(GcScene *scene, GcUiTextures *ui) {
     if (!ui)
         return;
@@ -232,7 +259,7 @@ bool gc_scene_init(GcScene *scene, CcPlatform *platform, const char *ipl_path) {
         gc_scene_destroy(scene);
         return false;
     }
-    scene->trail_texture = upload_image(scene, &scene->startup.trail_texture);
+    scene->trail_texture = upload_startup_trail(scene);
     if (!scene->trail_texture) {
         gc_scene_destroy(scene);
         return false;

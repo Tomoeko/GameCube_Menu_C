@@ -14,13 +14,15 @@ static void draw_at(GcScene *scene, gc_menu *menu, double seconds) {
 }
 
 static void native_startup_trails(const GcScene *scene, const GcStartupPose *pose,
-                                  float pixel_scale_y) {
+                                  float pixel_scale_y, uint32_t texture) {
     const unsigned corners[4] = {0, 1, 3, 2};
-    const float coordinates[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+    /* Native TEX0 overrides its fixed-point fraction to thirteen bits:
+     * 0x4000 spans the original mask and its mirrored copy on each axis. */
+    const float coordinates[4][2] = {{0, 0}, {0, 2}, {2, 0}, {2, 2}};
     /* The original one-stage combiner passes raster RGB and multiplies
      * raster alpha by texture alpha. Texture intensity cannot darken RGB. */
     CcMaterialQuad material = {
-        .textures = {scene->trail_texture},
+        .textures = {texture},
         .wrap_s = {scene->startup.trail_texture.wrap_s},
         .wrap_t = {scene->startup.trail_texture.wrap_t},
         .texture_count = 1,
@@ -85,6 +87,22 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
     uint32_t gradient_texture =
         cc_platform_create_texture(scene->platform, 16, 16, gradient);
     assert(gradient_texture);
+    uint8_t mirrored_gradient[32 * 32 * 4];
+    for (unsigned y = 0; y < 32; ++y)
+        for (unsigned x = 0; x < 32; ++x) {
+            unsigned source_x = x < 16 ? x : 31 - x;
+            unsigned source_y = y < 16 ? y : 31 - y;
+            memcpy(mirrored_gradient + (y * 32 + x) * 4,
+                   gradient + (source_y * 16 + source_x) * 4, 4);
+        }
+    uint32_t mirrored_gradient_texture =
+        cc_platform_create_texture(scene->platform, 32, 32, mirrored_gradient);
+    assert(mirrored_gradient_texture);
+    const GcIplImage *native_mask = &scene->startup.trail_texture;
+    uint32_t native_texture =
+        cc_platform_create_texture(scene->platform, (int)native_mask->width,
+                                   (int)native_mask->height, native_mask->rgba);
+    assert(native_texture);
     bool pal = scene->startup.frame_rate == 50;
     float pixel_scale_y = pal ? 520.0f / 448 * (480.0f / 576) : 1;
     gc_menu_init(menu, pal ? GC_REGION_EUROPE : GC_REGION_USA);
@@ -92,7 +110,7 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
     assert(actual);
     for (unsigned sample = 0; sample < 4; ++sample) {
         if (sample == 3)
-            isolated.trail_texture = gradient_texture;
+            isolated.trail_texture = mirrored_gradient_texture;
         GcStartupPose pose;
         assert(gc_startup_sample_menu(&scene->startup, samples[sample], &pose));
         assert(pose.phase == GC_STARTUP_ROLL && pose.trail_count > 0);
@@ -105,7 +123,8 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
                 assert(gc_software_read_pixel(scene->platform, x, y, actual + offset));
             }
         cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
-        native_startup_trails(&isolated, &pose, pixel_scale_y);
+        native_startup_trails(scene, &pose, pixel_scale_y,
+                              sample == 3 ? gradient_texture : native_texture);
         cc_platform_end(scene->platform);
         unsigned visible = 0;
         bool partial = false;
@@ -122,6 +141,8 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
             }
         assert(visible > 100 && partial);
     }
+    cc_platform_destroy_texture(scene->platform, native_texture);
+    cc_platform_destroy_texture(scene->platform, mirrored_gradient_texture);
     cc_platform_destroy_texture(scene->platform, gradient_texture);
     free(actual);
 }

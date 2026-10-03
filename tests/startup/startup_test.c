@@ -74,12 +74,33 @@ static void test_synthetic_sequence(void) {
     assert(!gc_startup_sample(&startup, 0, &pose));
 }
 
+static void test_native_trail_coordinates(const GcText *text) {
+    /* The trail draw overrides the shared texture format immediately before
+     * submitting vertices. Read that original override, not the shared default. */
+    const unsigned arguments[5] = {1, 13, 1, 3, 13};
+    size_t setup = text->europe ? 0x11690 : 0x10d58;
+    size_t coordinate = text->europe ? 0x114f8 : 0x10bc0;
+    assert(text->rom_size >= 20 && setup <= text->rom_size - 20);
+    assert(text->rom_size >= 4 && coordinate <= text->rom_size - 4);
+    for (unsigned index = 0; index < 5; ++index) {
+        uint32_t instruction = cc_read_be32(text->rom + setup + index * 4);
+        assert(instruction >> 26 == 14 && (instruction >> 16 & 31) == 0);
+        assert((instruction >> 21 & 31) == index + 3);
+        assert((instruction & 0xffff) == arguments[index]);
+    }
+    uint32_t vertex = cc_read_be32(text->rom + coordinate);
+    assert(vertex >> 26 == 14 && (vertex >> 16 & 31) == 0);
+    assert((vertex >> 21 & 31) == 0 && (vertex & 0xffff) == 0x4000);
+    assert((vertex & 0xffff) / (1u << arguments[4]) == 2);
+}
+
 static void test_original_trail_mask(const char *path, const GcIplImage *prepared) {
     GcText text = {0};
     GcIplResourceTable table;
     GcIplImage original = {0};
     unsigned matches = 0;
     assert(gc_text_load(path, &text));
+    test_native_trail_coordinates(&text);
     assert(gc_ipl_resource_table_decode(text.rom, text.rom_size,
                                         text.europe ? 0x82040 : 0x5f240, &table));
     /* Find the standalone I8 image through resource metadata independently
