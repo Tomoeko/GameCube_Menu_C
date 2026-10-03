@@ -8,6 +8,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    DUMMY_ICON_WIDTH = 32,
+    DUMMY_ICON_BYTES = DUMMY_ICON_WIDTH * DUMMY_ICON_WIDTH * 2,
+    DUMMY_ANIMATED_FRAMES = 3,
+    DUMMY_COMMENT_BYTES = 64
+};
+
+_Static_assert((DUMMY_ANIMATED_FRAMES * DUMMY_ICON_BYTES + DUMMY_COMMENT_BYTES) <=
+                   GC_CARD_BLOCK_BYTES,
+               "Dummy artwork and comments must fit in one save block");
+
 void gc_config_init(GcConfig *config) {
     if (config)
         *config = (GcConfig){.slot_present = {true, true}, .dummy_count = {3, 3}};
@@ -172,13 +183,21 @@ GcConfigResult gc_config_write(const GcConfig *config, const char *path) {
     return failed ? GC_CONFIG_IO : GC_CONFIG_OK;
 }
 
-static void dummy_icon(uint8_t *pixels, unsigned slot, unsigned file) {
-    /* Independently authored QA graphic in native4x4 texture tiles. */
-    for (unsigned y = 0; y < 32; ++y) {
-        for (unsigned x = 0; x < 32; ++x) {
+static unsigned dummy_icon_frames(unsigned file) {
+    return file % 3 ? DUMMY_ANIMATED_FRAMES : 1;
+}
+
+static void dummy_icon(uint8_t *pixels, unsigned slot, unsigned file, unsigned frame) {
+    /* Independently authored QA graphics in native 4x4 texture tiles. */
+    bool animated = dummy_icon_frames(file) > 1;
+    unsigned marker_left = 6 + frame * 6;
+    for (unsigned y = 0; y < DUMMY_ICON_WIDTH; ++y) {
+        for (unsigned x = 0; x < DUMMY_ICON_WIDTH; ++x) {
             bool border = x < 3 || y < 3 || x >= 29 || y >= 29;
-            bool mark = x >= 8 && x <= 23 && y >= 8 && y <= 23 &&
-                        (((x / 4 + y / 4 + file) & 1) == 0);
+            bool mark =
+                animated ? x >= marker_left && x < marker_left + 8 && y >= 12 && y < 20
+                         : x >= 8 && x <= 23 && y >= 8 && y <= 23 &&
+                               (((x / 4 + y / 4 + file) & 1) == 0);
             unsigned red = border ? 3 : mark ? 31 : (8 + file * 5) & 31;
             unsigned green = border ? 3 : mark ? 31 : (slot ? 12 : 24);
             unsigned blue = border ? 3 : mark ? 31 : (slot ? 24 : 12);
@@ -211,11 +230,19 @@ gc_card_image_result gc_config_create_card(const GcConfig *config, unsigned slot
                      index + 1);
             cc_write_be32(entry + 0x28, index);
             cc_write_be32(entry + 0x2c, 0);
-            cc_write_be16(entry + 0x30, 2); /* One RGB5A3 icon, no banner. */
-            cc_write_be16(entry + 0x32, 1); /* Native four-video-frame icon duration. */
+            unsigned frames = dummy_icon_frames(index);
+            unsigned formats = 0;
+            unsigned speeds = 0;
+            for (unsigned frame = 0; frame < frames; ++frame) {
+                formats |= 2u << (frame * 2); /* RGB5A3, no banner. */
+                speeds |= (frames > 1 ? 3u : 1u) << (frame * 2);
+            }
+            entry[7] = index % 3 == 2 ? 4 : 0; /* Native back-and-forth flag. */
+            cc_write_be16(entry + 0x30, (uint16_t)formats);
+            cc_write_be16(entry + 0x32, (uint16_t)speeds);
             cc_write_be16(entry + 0x36, (uint16_t)(5 + index));
             cc_write_be16(entry + 0x38, 1);
-            cc_write_be32(entry + 0x3c, 2048);
+            cc_write_be32(entry + 0x3c, frames * DUMMY_ICON_BYTES);
             cc_write_be16(bat + 10 + index * 2, UINT16_MAX);
         }
         cc_write_be16(bat + 6, (uint16_t)(59 - files));
@@ -225,9 +252,12 @@ gc_card_image_result gc_config_create_card(const GcConfig *config, unsigned slot
     }
     for (unsigned index = 0; index < files; ++index) {
         uint8_t *payload = pending.bytes + (5u + index) * GC_CARD_BLOCK_BYTES;
-        dummy_icon(payload, slot, index);
-        snprintf((char *)payload + 2048, 32, "Test Save %02u", index + 1);
-        snprintf((char *)payload + 2080, 32, "Local QA data - Card %c",
+        unsigned frames = dummy_icon_frames(index);
+        for (unsigned frame = 0; frame < frames; ++frame)
+            dummy_icon(payload + frame * DUMMY_ICON_BYTES, slot, index, frame);
+        size_t comment_offset = frames * DUMMY_ICON_BYTES;
+        snprintf((char *)payload + comment_offset, 32, "Test Save %02u", index + 1);
+        snprintf((char *)payload + comment_offset + 32, 32, "Local QA data - Card %c",
                  slot ? 'B' : 'A');
     }
     gc_card_image verified = {0};

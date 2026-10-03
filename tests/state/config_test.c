@@ -74,6 +74,76 @@ static void test_noinsert_parser(void) {
     assert(!gc_config_noinsert_mask("a", NULL));
 }
 
+static void check_dummy_art(const gc_card_image *image, size_t file_index,
+                            unsigned original_index, unsigned original_slot) {
+    GcCardArt art = {0};
+    unsigned variant = original_index % 3;
+    unsigned frame_count = variant ? 3 : 1;
+    char title[32];
+    char comment[32];
+
+    assert(gc_card_art_load(image, file_index, &art) == GC_CARD_IMAGE_OK);
+    assert(art.frame_count == frame_count && art.ping_pong == (variant == 2));
+    assert(!art.banner.rgba);
+    assert(image->card.files[file_index].blocks == 1);
+    assert(image->files[file_index].icon_formats == (variant ? 0x2a : 2));
+    assert(image->files[file_index].icon_speeds == (variant ? 0x3f : 1));
+    assert(image->files[file_index].comment_offset == frame_count * 2048);
+    snprintf(title, sizeof(title), "Test Save %02u", original_index + 1);
+    snprintf(comment, sizeof(comment), "Local QA data - Card %c",
+             original_slot ? 'B' : 'A');
+    assert(!strcmp(image->card.files[file_index].title, title));
+    assert(!strcmp(image->card.files[file_index].comment, comment));
+    for (unsigned frame = 0; frame < frame_count; ++frame) {
+        const GcIplImage *icon = &art.icons[frame];
+        assert(art.durations[frame] == (variant ? 12u : 4u));
+        assert(icon->rgba && icon->width == 32 && icon->height == 32);
+        assert(icon->rgba[0] == 24 && icon->rgba[1] == 24 && icon->rgba[2] == 24 &&
+               icon->rgba[3] == 255);
+        for (unsigned previous = 0; previous < frame; ++previous)
+            assert(memcmp(icon->rgba, art.icons[previous].rgba, 32u * 32u * 4u));
+    }
+    if (variant) {
+        assert(gc_card_art_frame(&art, 11) == 0);
+        assert(gc_card_art_frame(&art, 12) == 1);
+        assert(gc_card_art_frame(&art, 23) == 1);
+        assert(gc_card_art_frame(&art, 24) == 2);
+        assert(gc_card_art_frame(&art, 35) == 2);
+        assert(gc_card_art_frame(&art, 36) == (variant == 2 ? 1u : 0u));
+        assert(gc_card_art_frame(&art, 47) == (variant == 2 ? 1u : 0u));
+        assert(gc_card_art_frame(&art, variant == 2 ? 48 : 36) == 0);
+    } else {
+        assert(gc_card_art_frame(&art, UINT64_MAX) == 0);
+    }
+    assert(gc_card_art_icon(&art, 0) == &art.icons[0]);
+    gc_card_art_destroy(&art);
+}
+
+static void test_animated_dummy_copy(gc_card_image *source, unsigned slot) {
+    gc_card_image target = {0};
+    gc_card_image restored = {0};
+    uint8_t original[GC_CARD_BLOCK_BYTES];
+    uint8_t transferred[GC_CARD_BLOCK_BYTES];
+
+    assert(gc_card_image_create(&target, 64, source->encoding, 0) == GC_CARD_IMAGE_OK);
+    assert(gc_card_image_copy(source, &target, 1, false) == GC_CARD_IMAGE_OK);
+    assert(source->card.file_count == 3 && target.card.file_count == 1);
+    check_dummy_art(&target, 0, 1, slot);
+    assert(gc_card_image_read_file(source, 1, 0, original, sizeof(original)) ==
+           GC_CARD_IMAGE_OK);
+    assert(gc_card_image_read_file(&target, 0, 0, transferred, sizeof(transferred)) ==
+           GC_CARD_IMAGE_OK);
+    assert(!memcmp(original, transferred, sizeof(original)));
+    assert(gc_card_image_write(&target, state_paths[slot]) == GC_CARD_IMAGE_OK);
+    assert(gc_card_image_load(&restored, state_paths[slot]) == GC_CARD_IMAGE_OK);
+    assert(restored.byte_count == target.byte_count &&
+           !memcmp(restored.bytes, target.bytes, target.byte_count));
+    check_dummy_art(&restored, 0, 1, slot);
+    assert(remove(state_paths[slot]) == 0);
+    gc_card_image_free(&restored);
+    gc_card_image_free(&target);
+}
+
 static void test_native_dummy_images(void) {
     GcConfig config;
     gc_config_init(&config);
@@ -90,15 +160,9 @@ static void test_native_dummy_images(void) {
             assert(image.card.file_count == 3 &&
                    gc_card_free_blocks(&image.card) == 56);
             assert(image.encoding == encoding && image.card.files[0].blocks == 1);
-            assert(!strcmp(image.card.files[0].title, "Test Save 01"));
-            GcCardArt art = {0};
-            assert(gc_card_art_load(&image, 0, &art) == GC_CARD_IMAGE_OK);
-            assert(art.frame_count == 1 && art.durations[0] == 4);
-            assert(art.icons[0].rgba && art.icons[0].width == 32 &&
-                   art.icons[0].height == 32);
-            assert(!art.banner.rgba);
-            assert(art.icons[0].rgba[0] == 24 && art.icons[0].rgba[3] == 255);
-            gc_card_art_destroy(&art);
+            for (unsigned index = 0; index < 3; ++index)
+                check_dummy_art(&image, index, index, slot);
+            test_animated_dummy_copy(&image, slot);
             gc_card_image snapshot = {0};
             assert(gc_card_image_clone(&snapshot, &image) == GC_CARD_IMAGE_OK);
             assert(gc_config_create_card(&config, slot, (uint16_t)encoding, &image) ==
@@ -118,6 +182,8 @@ static void test_native_dummy_images(void) {
     gc_card_image full = {0};
     assert(gc_config_create_card(&config, 0, 0, &full) == GC_CARD_IMAGE_OK);
     assert(full.card.file_count == 59 && gc_card_free_blocks(&full.card) == 0);
+    for (unsigned index = 0; index < GC_CONFIG_DUMMY_LIMIT; ++index)
+        check_dummy_art(&full, index, index, 0);
     gc_card_image_free(&full);
     config.dummy_count[0] = GC_CONFIG_DUMMY_LIMIT + 1;
     assert(gc_config_create_card(&config, 0, 0, &full) == GC_CARD_IMAGE_ARGUMENT);
@@ -201,6 +267,14 @@ static void check_dummy_card_persistence(const GcServices *services) {
     }
 }
 
+static void check_persisted_dummy_art(unsigned slot, size_t file_index,
+                                      unsigned original_index, unsigned original_slot) {
+    gc_card_image saved = {0};
+    assert(gc_card_image_load(&saved, state_paths[slot]) == GC_CARD_IMAGE_OK);
+    check_dummy_art(&saved, file_index, original_index, original_slot);
+    gc_card_image_free(&saved);
+}
+
 static void test_scrollable_dummy_operations(void) {
     GcConfig config;
     gc_config_init(&config);
@@ -248,6 +322,7 @@ static void test_scrollable_dummy_operations(void) {
                                        sizeof(transferred)) == GC_CARD_IMAGE_OK);
         assert(!memcmp(original, transferred, sizeof(original)));
         check_dummy_card_persistence(services);
+        check_persisted_dummy_art(1, 25, 24, 0);
 
         gc_services_press(services, menu, GC_BUTTON_CONFIRM);
         gc_services_press(services, menu, GC_BUTTON_UP);
@@ -268,6 +343,7 @@ static void test_scrollable_dummy_operations(void) {
                                        sizeof(transferred)) == GC_CARD_IMAGE_OK);
         assert(!memcmp(original, transferred, sizeof(original)));
         check_dummy_card_persistence(services);
+        check_persisted_dummy_art(1, 26, 20, 0);
 
         gc_services_press(services, menu, GC_BUTTON_CONFIRM);
         perform_dummy_action(services, menu, GC_CARD_ACTION_ERASE);
