@@ -45,6 +45,10 @@ static bool parse_value(GcAppOptions *options, const char *flag, const char *val
         options->startup_sound = (unsigned)(*value - '0');
     } else if (!strcmp(flag, "--frames")) {
         return gc_option_unsigned(value, 10, 1, ULONG_MAX, &options->frame_limit);
+    } else if (!strcmp(flag, "--audio")) {
+        if (strcmp(value, "web"))
+            return false;
+        options->record_audio = CC_CAPTURE_AUDIO_WEB;
     } else {
         return false;
     }
@@ -59,6 +63,7 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
                               .config_path = "Files/config.ini",
                               .boot_phase = GC_BOOT_NORMAL};
     bool explicit_ipl = false;
+    bool explicit_audio = false;
     for (int index = 1; index < argc; ++index) {
         const char *flag = argv[index];
         if (!flag)
@@ -67,6 +72,8 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
             return GC_APP_OPTIONS_HELP;
         if (!strcmp(flag, "--step")) {
             candidate.inspect_frames = true;
+        } else if (!strcmp(flag, "--aa")) {
+            candidate.antialiasing = true;
         } else if (!strcmp(flag, "--record")) {
             candidate.record = true;
             candidate.record_half =
@@ -93,9 +100,12 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
             if (index + 1 >= argc || !argv[index + 1] ||
                 !parse_value(&candidate, flag, argv[index + 1], &explicit_ipl))
                 return GC_APP_OPTIONS_INVALID;
+            explicit_audio |= !strcmp(flag, "--audio");
             ++index;
         }
     }
+    if (explicit_audio && !candidate.record)
+        return GC_APP_OPTIONS_INVALID;
     static const char *const region_states[] = {
         "Files/state-jap.dat", "Files/state-usa.dat", "Files/state-eur.dat"};
     if (!explicit_ipl)
@@ -119,7 +129,10 @@ void gc_app_options_usage(FILE *output) {
             "       [--boot-state normal|notice|lost]\n"
             "       [--delaystart [seconds]] (wait for input or a timed delay)\n"
             "       [--record [half]] (compressed MP4 to Movies until exit)\n"
-            "       half records half width and height; audio stays unchanged.\n"
+            "       [--audio web] (AAC recording audio for web playback)\n"
+            "       Audio stays unchanged without --audio.\n"
+            "       half records half width and height.\n"
+            "       [--aa] (smooth edges; uses extra GPU resources)\n"
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
             "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
             "R restarts startup from frame 0 (preserving the --step pause state).\n"

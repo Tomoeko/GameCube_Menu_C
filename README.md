@@ -33,6 +33,9 @@ Files/build/gamecube-menu --noinsert b
 Files/build/gamecube-menu --noinsert ab
 Files/build/gamecube-menu --disc Files/game.iso
 Files/build/gamecube-menu --config Files/config.ini
+Files/build/gamecube-menu --aa
+Files/build/gamecube-menu --record
+Files/build/gamecube-menu --record half --audio web
 Files/build/gamecube-menu --help
 ```
 
@@ -42,6 +45,10 @@ R restarts startup from frame 0; `--step` keeps its current pause/play state.
 D inserts/ejects test media; E toggles the test error; Z selects the alternate
 startup sound. With `--step`, comma rewinds, period advances, and Space plays/pauses.
 Bare `--delaystart` waits for A, B, or an arrow key.
+
+`--aa` smooths edges. It uses extra GPU resources.
+Recordings go to Movies and stop on exit. `half` halves both video dimensions.
+Audio stays unchanged by default. `--audio web` uses AAC on macOS for web previews.
 
 `Files/config.ini` is created automatically. Two empty cards are the default.
 To enable dummy saves and scrolling:

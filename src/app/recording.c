@@ -18,12 +18,13 @@ static void capture_end(void *context) {
 
 static CcRecordingOptions recording_options(CcPlatform *platform, GcAudio *audio,
                                             unsigned video_rate, bool audible,
-                                            bool half_size) {
+                                            bool half_size, CcCaptureAudioMode mode) {
     CcRecordingOptions options = {.platform = platform,
                                   .sample_rate =
                                       audible ? gc_audio_sample_rate(audio) : 48000,
                                   .video_rate = video_rate,
                                   .half_size = half_size,
+                                  .audio_mode = mode,
                                   .filename_prefix = "GameCube"};
     if (audible) {
         options.audio = (CcRecordingAudioSource){.context = audio,
@@ -37,10 +38,17 @@ static CcRecordingOptions recording_options(CcPlatform *platform, GcAudio *audio
 
 CcRecording *gc_recording_open(CcPlatform *platform, GcAudio *audio,
                                unsigned video_rate, bool audible, bool half_size) {
+    return gc_recording_open_with_audio(platform, audio, video_rate, audible, half_size,
+                                        CC_CAPTURE_AUDIO_NORMAL);
+}
+
+CcRecording *gc_recording_open_with_audio(CcPlatform *platform, GcAudio *audio,
+                                          unsigned video_rate, bool audible,
+                                          bool half_size, CcCaptureAudioMode mode) {
     if (!audio)
         return NULL;
     CcRecordingOptions options =
-        recording_options(platform, audio, video_rate, audible, half_size);
+        recording_options(platform, audio, video_rate, audible, half_size, mode);
     return cc_recording_open(&options);
 }
 
@@ -49,7 +57,7 @@ CcRecording *gc_recording_open_path(CcPlatform *platform, GcAudio *audio,
                                     const char *path) {
     if (!audio)
         return NULL;
-    CcRecordingOptions options =
-        recording_options(platform, audio, video_rate, audible, half_size);
+    CcRecordingOptions options = recording_options(platform, audio, video_rate, audible,
+                                                   half_size, CC_CAPTURE_AUDIO_NORMAL);
     return cc_recording_open_path(&options, path);
 }

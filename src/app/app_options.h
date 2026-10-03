@@ -3,6 +3,7 @@
 
 #include "gamecube/boot_control.h"
 #include "gamecube/menu.h"
+#include "console_common/capture/capture_writer.h"
 
 #include <stdio.h>
 
@@ -14,6 +15,7 @@ typedef struct {
     const char *card_inputs[2];
     gc_region region;
     GcBootPhase boot_phase;
+    CcCaptureAudioMode record_audio;
     unsigned long frame_limit;
     unsigned startup_sound;
     unsigned absent_cards;
@@ -24,6 +26,7 @@ typedef struct {
     bool timed_start;
     bool record;
     bool record_half;
+    bool antialiasing;
 } GcAppOptions;
 
 typedef enum {

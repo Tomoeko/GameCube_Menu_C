@@ -924,6 +924,10 @@ int main(int argc, char **argv) {
         gc_app_options_usage(stderr);
         return parsed_options == GC_APP_OPTIONS_HELP ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (options.record && !cc_capture_audio_mode_supported(options.record_audio)) {
+        fprintf(stderr, "Web recording audio is unavailable on this platform.\n");
+        return EXIT_FAILURE;
+    }
     const char *card_states[2] = {"Files/card-a.raw", "Files/card-b.raw"};
     gc_menu *menu = calloc(1, sizeof(*menu));
     if (!menu)
@@ -997,8 +1001,15 @@ int main(int argc, char **argv) {
     }
     CcPlatform *platform = cc_platform_create("GameCube Menu", 960, 720);
     GcScene scene = {0};
-    if (!platform || !gc_scene_init(&scene, platform, options.ipl_path)) {
-        fprintf(stderr, "Cannot initialize graphics or the local IPL font.\n");
+    bool graphics_ready = platform != NULL;
+    if (graphics_ready && options.antialiasing &&
+        !cc_platform_set_antialiasing(platform, true)) {
+        fprintf(stderr, "Anti-aliasing is unavailable for this display.\n");
+        graphics_ready = false;
+    }
+    if (!graphics_ready || !gc_scene_init(&scene, platform, options.ipl_path)) {
+        if (graphics_ready || !platform)
+            fprintf(stderr, "Cannot initialize graphics or the local IPL font.\n");
         cc_platform_destroy(platform);
         gc_services_destroy(services);
         gc_disc_destroy(&disc);
@@ -1114,8 +1125,9 @@ int main(int argc, char **argv) {
                       .startup_delay_ticks = delay_ticks,
                       .audio_started = audio_started};
     if (running && options.record) {
-        app.recording = gc_recording_open(platform, audio, scene.startup.frame_rate,
-                                          !options.inspect_frames, options.record_half);
+        app.recording = gc_recording_open_with_audio(
+            platform, audio, scene.startup.frame_rate, !options.inspect_frames,
+            options.record_half, options.record_audio);
         if (!app.recording) {
             fprintf(stderr, "Could not start recording in the Movies folder.\n");
             running = false;

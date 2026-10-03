@@ -9,6 +9,7 @@ static void test_defaults_and_region_paths(void) {
     assert(gc_app_options_parse(&options, 1, defaults) == GC_APP_OPTIONS_OK);
     assert(options.region == GC_REGION_USA && !options.inspect_frames &&
            !options.record);
+    assert(!options.antialiasing && options.record_audio == CC_CAPTURE_AUDIO_NORMAL);
     assert(!strcmp(options.ipl_path, "Files/GameCube_BIOS/USA/IPL.bin"));
     assert(!strcmp(options.state_path, "Files/state-usa.dat"));
     const char *regions[] = {"JAP", "USA", "EUR"};
@@ -104,7 +105,7 @@ static void test_recording_arguments(void) {
 static void test_invalid_arguments_are_atomic(void) {
     const char *flags[] = {"--ipl",           "--region", "--config",   "--boot-state",
                            "--card-a",        "--card-b", "--noinsert", "--disc",
-                           "--startup-sound", "--frames", "--frame"};
+                           "--startup-sound", "--frames", "--frame",    "--audio"};
     GcAppOptions original;
     memset(&original, 0, sizeof(original));
     original.frame_limit = 17;
@@ -142,10 +143,39 @@ static void test_invalid_arguments_are_atomic(void) {
     assert(gc_app_options_parse(NULL, 4, help) == GC_APP_OPTIONS_INVALID);
 }
 
+static void test_recording_audio_and_antialiasing(void) {
+    GcAppOptions options;
+    char *web[] = {"gamecube-menu", "--record", "half", "--audio", "web", "--aa"};
+    assert(gc_app_options_parse(&options, 6, web) == GC_APP_OPTIONS_OK);
+    assert(options.record && options.record_half && options.antialiasing);
+    assert(options.record_audio == CC_CAPTURE_AUDIO_WEB);
+    char *reordered[] = {"gamecube-menu", "--audio", "web", "--record", "--step"};
+    assert(gc_app_options_parse(&options, 5, reordered) == GC_APP_OPTIONS_OK);
+    assert(options.record && !options.record_half && options.inspect_frames);
+    assert(options.record_audio == CC_CAPTURE_AUDIO_WEB);
+    char *aa[] = {"gamecube-menu", "--aa"};
+    assert(gc_app_options_parse(&options, 2, aa) == GC_APP_OPTIONS_OK);
+    assert(options.antialiasing && !options.record);
+    assert(options.record_audio == CC_CAPTURE_AUDIO_NORMAL);
+    GcAppOptions original = options;
+    char *without_record[] = {"gamecube-menu", "--audio", "web"};
+    assert(gc_app_options_parse(&options, 3, without_record) == GC_APP_OPTIONS_INVALID);
+    assert(!memcmp(&options, &original, sizeof(options)));
+    const char *invalid_modes[] = {"normal", "aac", "", "--aa"};
+    for (unsigned index = 0; index < sizeof(invalid_modes) / sizeof(invalid_modes[0]);
+         ++index) {
+        char *invalid[] = {"gamecube-menu", "--record", "--audio",
+                           (char *)invalid_modes[index]};
+        assert(gc_app_options_parse(&options, 4, invalid) == GC_APP_OPTIONS_INVALID);
+        assert(!memcmp(&options, &original, sizeof(options)));
+    }
+}
+
 int main(void) {
     test_defaults_and_region_paths();
     test_inspection_and_overrides();
     test_recording_arguments();
     test_invalid_arguments_are_atomic();
+    test_recording_audio_and_antialiasing();
     return 0;
 }

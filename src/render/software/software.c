@@ -80,6 +80,10 @@ bool cc_platform_set_fullscreen(CcPlatform *platform, bool fullscreen) {
     return platform != NULL && !fullscreen;
 }
 
+bool cc_platform_set_antialiasing(CcPlatform *platform, bool enabled) {
+    return platform != NULL && !enabled;
+}
+
 void cc_platform_begin(CcPlatform *platform, CcColor clear) {
     if (!platform)
         return;
