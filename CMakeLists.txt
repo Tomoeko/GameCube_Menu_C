@@ -180,6 +180,23 @@ if(GC_BUILD_APP)
     gc_warnings(gamecube-menu)
 endif()
 
+set(GC_RUNTIME_DESTINATION "Files/build")
+if(WIN32)
+    set(GC_RUNTIME_DESTINATION "Files/build/Release")
+endif()
+install(TARGETS gc-ipl-tool gc-audio-tool gamecube-render
+    RUNTIME DESTINATION "${GC_RUNTIME_DESTINATION}" COMPONENT Runtime)
+if(GC_BUILD_APP)
+    install(TARGETS gamecube-menu
+        RUNTIME DESTINATION "${GC_RUNTIME_DESTINATION}" COMPONENT Runtime
+        BUNDLE DESTINATION "Files/build" COMPONENT Runtime)
+    if(APPLE)
+        install(PROGRAMS tools/launch.sh DESTINATION "Files/build"
+            RENAME gamecube-menu COMPONENT Runtime)
+    endif()
+endif()
+install(FILES LICENSE DESTINATION "." COMPONENT Runtime)
+
 include(CTest)
 if(BUILD_TESTING)
     # Every test keeps assertions enabled, including release builds.
