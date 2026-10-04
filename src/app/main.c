@@ -23,6 +23,7 @@
 #include <time.h>
 #include "console_common/support/host.h"
 #include "console_common/support/display_settings.h"
+#include "console_common/platform/window_controls.h"
 
 static volatile sig_atomic_t application_exit_requested;
 
@@ -589,7 +590,7 @@ typedef struct {
     bool start_requested;
     bool escape_held;
     bool escape_window_control;
-    bool fullscreen_key_held;
+    CcWindowControls window_controls;
     bool restart_key_held;
     bool restart_requested;
     bool surface_changed;
@@ -667,6 +668,9 @@ static bool present_host_redraw(AppRuntime *app, AppPlayback *playback) {
 
 static bool host_control_key(AppRuntime *app, AppPlayback *playback,
                              const CcEvent *event) {
+    if (cc_window_controls_event(&playback->window_controls, app->scene->platform,
+                                 event, false))
+        return true;
     if (event->type != CC_EVENT_KEY_DOWN && event->type != CC_EVENT_KEY_UP)
         return false;
     bool down = event->type == CC_EVENT_KEY_DOWN;
@@ -686,21 +690,12 @@ static bool host_control_key(AppRuntime *app, AppPlayback *playback,
         return true;
     }
     if (down && event->key_repeat &&
-        (event->key == 'r' || event->key == 'R' || event->key == 'f' ||
-         event->key == 'F' || event->key == CC_KEY_ESCAPE))
+        (event->key == 'r' || event->key == 'R' || event->key == CC_KEY_ESCAPE))
         return true;
     if (event->key == 'r' || event->key == 'R') {
         if (down && !playback->restart_key_held)
             playback->restart_requested = true;
         playback->restart_key_held = down;
-        return true;
-    }
-    if (event->key == 'f' || event->key == 'F') {
-        bool was_held = playback->fullscreen_key_held;
-        playback->fullscreen_key_held = down;
-        if (down && !was_held)
-            cc_platform_set_fullscreen(
-                app->scene->platform, !cc_platform_is_fullscreen(app->scene->platform));
         return true;
     }
     if (event->key != CC_KEY_ESCAPE)
@@ -760,7 +755,6 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
             app->runtime->error_toggle_held = false;
             playback->escape_held = false;
             playback->escape_window_control = false;
-            playback->fullscreen_key_held = false;
             playback->restart_key_held = false;
             playback->volume_keys_held = 0;
             playback->volume_repeat_elapsed = -0.25;

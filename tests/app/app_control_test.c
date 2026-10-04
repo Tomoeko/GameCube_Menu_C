@@ -40,6 +40,7 @@ static bool test_antialiasing(CcPlatform *platform, bool enabled) {
     return true;
 }
 #define cc_platform_set_antialiasing test_antialiasing
+#include "../../Common/src/platform/window_controls.c"
 #include "app/main.c"
 #undef cc_platform_set_antialiasing
 #undef main
@@ -390,7 +391,7 @@ static void test_window_controls(void) {
     send_window_event(
         &app, &playback,
         (CcEvent){.type = CC_EVENT_POINTER_LEAVE, .cancel_capture = true});
-    assert(!playback.fullscreen_key_held && !playback.escape_held);
+    assert(!playback.window_controls.fullscreen_key_held && !playback.escape_held);
     runtime.startup_waiting = false;
     send_window_event(
         &app, &playback,
