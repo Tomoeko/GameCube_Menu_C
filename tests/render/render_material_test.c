@@ -231,10 +231,10 @@ static void test_native_cube_reflection(const char *ipl_path, const char *frame_
                 CcMaterialVertex vertex = {0};
                 GcIplVertex input = {0};
                 gc_render_texture_coordinates(material, &input, normal, &vertex);
-                assert(fabsf(vertex.uv[0][0] - ((float)x + 0.5f) / image->width) <
-                       0.00001f);
-                assert(fabsf(vertex.uv[0][1] - ((float)y + 0.5f) / image->height) <
-                       0.00001f);
+                assert(fabsf(vertex.uv[0][0] -
+                             ((float)x + 0.5f) / (float)image->width) < 0.00001f);
+                assert(fabsf(vertex.uv[0][1] -
+                             ((float)y + 0.5f) / (float)image->height) < 0.00001f);
                 compare_material(material, texel, raster, frame_path);
             }
         }

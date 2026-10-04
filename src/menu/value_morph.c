@@ -107,7 +107,8 @@ static GcEditField menu_field(const gc_menu *menu) {
         if (menu->editor_index == 1)
             return GC_EDIT_SCREEN_POSITION;
     } else if (menu->page == GC_PAGE_CALENDAR) {
-        return (GcEditField)(GC_EDIT_DAY + gc_menu_calendar_field(menu));
+        return (GcEditField)((unsigned)GC_EDIT_DAY +
+                             (unsigned)gc_menu_calendar_field(menu));
     }
     return GC_EDIT_PUNCTUATION;
 }

@@ -1016,7 +1016,7 @@ static void draw_card_popup(GcScene *scene, const gc_menu *menu, unsigned slot) 
     for (unsigned index = 0; index < 3; index++) {
         GcLayoutText row = popup.rows[index];
         row.box.center_y =
-            first_y + index * text_layout.line_spacing * pose.row_spacing;
+            first_y + (float)(index * text_layout.line_spacing) * pose.row_spacing;
         unsigned entry = popup.text_entries[index];
         bool selected = index == (unsigned)record->action;
         uint8_t opacity = selected ? pose.body_alpha : pose.other_rows_alpha;

@@ -221,8 +221,8 @@ bool gc_layout_pane_quad(const GcLayoutPane *pane, GcLayoutVertex vertices[4]) {
     v[1] = 1.0f - v[0];
     /* Native vertex emission at 0x8130a1f8 rotates after axis flips. */
     for (unsigned index = 0; index < 4; ++index) {
-        vertices[index].x = left + column[index] * pane->box.width;
-        vertices[index].y = top + row[index] * pane->box.height;
+        vertices[index].x = left + (float)column[index] * pane->box.width;
+        vertices[index].y = top + (float)row[index] * pane->box.height;
         vertices[index].u =
             u[(pane->flags & GC_LAYOUT_ROTATE_UV) ? row[index] : column[index]];
         vertices[index].v =
@@ -354,10 +354,10 @@ bool gc_layout_frame_quad(const GcLayoutFrame *frame, const GcIplImage *textures
     for (unsigned vertex = 0; vertex < 4; ++vertex) {
         unsigned u = horizontal_edge ? 0 : column[vertex];
         unsigned v = vertical_edge ? 0 : row[vertex];
-        candidate.vertices[vertex] =
-            (GcLayoutVertex){left + column[vertex] * width, top + row[vertex] * height,
-                             (float)((flags & GC_LAYOUT_FLIP_U) ? 1 - u : u),
-                             (float)((flags & GC_LAYOUT_FLIP_V) ? 1 - v : v)};
+        candidate.vertices[vertex] = (GcLayoutVertex){
+            left + (float)column[vertex] * width, top + (float)row[vertex] * height,
+            (float)((flags & GC_LAYOUT_FLIP_U) ? 1 - u : u),
+            (float)((flags & GC_LAYOUT_FLIP_V) ? 1 - v : v)};
         if (index) {
             candidate.colors[vertex] = tint;
         } else {
@@ -428,7 +428,7 @@ bool gc_layout_card_popup(const GcLayoutTable *table, unsigned slot,
         candidate.rows[index].box =
             (GcLayoutBox){left + 8 + measured_width * 0.5f,
                           top + 8 + measured_line_height * 0.5f +
-                              (confirmation ? 0 : index * text.line_spacing),
+                              (float)(confirmation ? 0 : index * text.line_spacing),
                           measured_width, measured_line_height};
         candidate.rows[index].frame_index = UINT16_MAX;
         candidate.text_entries[index] = 2 + index;
@@ -446,7 +446,7 @@ bool gc_layout_card_popup(const GcLayoutTable *table, unsigned slot,
             candidate.rows[1 + index].box =
                 (GcLayoutBox){left + 8 + measured_width * 0.5f,
                               confirmation_top + 8 + measured_line_height * 0.5f +
-                                  index * text.line_spacing,
+                                  (float)(index * text.line_spacing),
                               measured_width, measured_line_height};
             candidate.rows[1 + index].frame_index = UINT16_MAX;
             candidate.text_entries[1 + index] = 5 + index;
@@ -557,10 +557,11 @@ bool gc_layout_confirmation_dialog(const GcLayoutTable *table,
      * eight-pixel padding surrounds each body with an eight-pixel gap. */
     for (unsigned index = 0; index < 2; ++index) {
         candidate.rows[index + 1] = text;
-        candidate.rows[index + 1].box = (GcLayoutBox){
-            text.box.center_x,
-            choices_top + 8 + choice_line_height * 0.5f + index * text.line_spacing,
-            choices_width, choice_line_height};
+        candidate.rows[index + 1].box =
+            (GcLayoutBox){text.box.center_x,
+                          choices_top + 8 + choice_line_height * 0.5f +
+                              (float)(index * text.line_spacing),
+                          choices_width, choice_line_height};
         candidate.rows[index + 1].frame_index = UINT16_MAX;
         candidate.text_entries[index + 1] = index + 1;
     }
@@ -603,7 +604,7 @@ bool gc_layout_language_dialog(const GcLayoutTable *table, float measured_width,
         candidate.rows[index] = text;
         candidate.rows[index].box = (GcLayoutBox){
             frame.box.center_x,
-            top + 8 + measured_line_height * 0.5f + index * text.line_spacing,
+            top + 8 + measured_line_height * 0.5f + (float)(index * text.line_spacing),
             measured_width, measured_line_height};
         candidate.rows[index].frame_index = UINT16_MAX;
         candidate.text_entries[index] = index + 12;

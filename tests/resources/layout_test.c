@@ -320,8 +320,8 @@ static void test_original_rom(const char *path) {
             char key[5];
             snprintf(key, sizeof(key), "i%c%02u", slot ? 'b' : 'a', index);
             assert(gc_layout_find_pane(card, key, 0, &pane));
-            assert(pane.box.center_x == (slot ? 332 : 84) + 56 * (index % 4));
-            assert(pane.box.center_y == 106 + 56 * (index / 4));
+            assert(pane.box.center_x == (float)((slot ? 332 : 84) + 56 * (index % 4)));
+            assert(pane.box.center_y == (float)(106 + 56 * (index / 4)));
             assert(pane.box.width == 46 && pane.box.height == 46);
             GcLayoutCardPopup positioned;
             assert(gc_layout_card_popup(card, slot, index, false, GC_CARD_ACTION_COPY,

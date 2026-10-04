@@ -1100,7 +1100,7 @@ static size_t geometry_points(const GcEditGeometry *geometry, const gc_menu *men
     if (menu->page == GC_PAGE_OPTIONS && state && state->screen_bar_state) {
         unsigned bar_group = state->screen_bar_state == 1 ? 3 : 4;
         unsigned duration = geometry->screen_bar_ticks[state->screen_bar_state - 1];
-        float time = (float)state->screen_bar_counter / duration;
+        float time = (float)state->screen_bar_counter / (float)duration;
         float opacity = state->screen_bar_state == 1 ? time : 1 - time;
         const uint8_t *bar_records;
         unsigned bar_count, bar_times;
