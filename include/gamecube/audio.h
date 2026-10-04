@@ -7,7 +7,7 @@
 
 typedef struct GcAudio GcAudio;
 
-#define GC_AUDIO_MENU_VOLUME_MAX 600u
+#define GC_AUDIO_MENU_VOLUME_MAX 800u
 
 typedef struct {
     unsigned wave_count;

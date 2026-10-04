@@ -635,7 +635,7 @@ typedef struct {
     double last;
 } AppPlayback;
 
-enum { MENU_VOLUME_STEP = 10 };
+enum { MENU_VOLUME_STEP = 100 };
 
 static void adjust_menu_volume(AppRuntime *app, AppPlayback *playback,
                                unsigned direction, unsigned steps) {

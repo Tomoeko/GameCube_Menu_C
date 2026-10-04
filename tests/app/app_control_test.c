@@ -286,7 +286,7 @@ static void test_draw(GcScene *scene, const gc_menu *menu) {
 
 static void test_redraw(GcScene *scene, const gc_menu *menu) {
     assert(test_volume_events && scene->frame_counter == 0 && menu->page_elapsed == 0);
-    assert(scene->volume_indicator_percent == 110);
+    assert(scene->volume_indicator_percent == 200);
     assert(scene->volume_indicator_alpha <= volume_last_alpha);
     volume_last_alpha = scene->volume_indicator_alpha;
     ++redrawn_frames;
@@ -429,33 +429,43 @@ static void test_music_volume_controls(void) {
     AppPlayback playback = {.running = true};
     test_window_events = true;
     send_window_key(&app, &playback, (CcKey)'=', true);
-    assert(gc_audio_menu_volume(audio) == 110);
+    assert(gc_audio_menu_volume(audio) == 200);
     assert(scene.volume_indicator_alpha == 1);
-    assert(scene.volume_indicator_percent == 110);
+    assert(scene.volume_indicator_percent == 200);
     send_window_key(&app, &playback, (CcKey)'=', false);
     send_window_key(&app, &playback, (CcKey)'-', true);
     assert(gc_audio_menu_volume(audio) == 100);
     send_window_key(&app, &playback, (CcKey)'-', true);
     assert(gc_audio_menu_volume(audio) == 100);
     send_window_key(&app, &playback, (CcKey)'-', false);
-    for (unsigned press = 0; press < 12; ++press) {
+    for (unsigned press = 0; press < 8; ++press) {
         send_window_key(&app, &playback, (CcKey)'-', true);
         send_window_key(&app, &playback, (CcKey)'-', false);
     }
     assert(gc_audio_menu_volume(audio) == 0);
+    for (unsigned press = 0; press < 8; ++press) {
+        send_window_key(&app, &playback, (CcKey)'=', true);
+        send_window_key(&app, &playback, (CcKey)'=', false);
+        assert(gc_audio_menu_volume(audio) == (press + 1) * 100);
+    }
+    for (unsigned press = 0; press < 8; ++press) {
+        send_window_key(&app, &playback, (CcKey)'-', true);
+        send_window_key(&app, &playback, (CcKey)'-', false);
+        assert(gc_audio_menu_volume(audio) == (7 - press) * 100);
+    }
     send_window_key(&app, &playback, (CcKey)'+', true);
     send_window_key(&app, &playback, (CcKey)'=', true);
-    assert(gc_audio_menu_volume(audio) == 10); /* Shift shares the same held key. */
+    assert(gc_audio_menu_volume(audio) == 100); /* Shift shares the same held key. */
     send_window_event(
         &app, &playback,
         (CcEvent){.type = CC_EVENT_KEY_DOWN, .key = (CcKey)'=', .key_repeat = true});
-    assert(gc_audio_menu_volume(audio) == 10);
+    assert(gc_audio_menu_volume(audio) == 100);
     advance_volume_overlay(&app, &playback, 0.34);
-    assert(gc_audio_menu_volume(audio) == 10);
+    assert(gc_audio_menu_volume(audio) == 100);
     advance_volume_overlay(&app, &playback, 0.02);
-    assert(gc_audio_menu_volume(audio) == 20);
+    assert(gc_audio_menu_volume(audio) == 200);
     advance_volume_overlay(&app, &playback, 0.1);
-    assert(gc_audio_menu_volume(audio) == 30);
+    assert(gc_audio_menu_volume(audio) == 300);
     send_window_event(
         &app, &playback,
         (CcEvent){.type = CC_EVENT_POINTER_LEAVE, .cancel_capture = true});
@@ -473,13 +483,13 @@ static void test_music_volume_controls(void) {
     assert(scene.volume_indicator_alpha == 0);
     send_window_key(&app, &playback, (CcKey)'=', true);
     send_window_key(&app, &playback, (CcKey)'=', false);
-    assert(gc_audio_menu_volume(audio) == 40);
+    assert(gc_audio_menu_volume(audio) == 400);
     assert(scene.volume_indicator_alpha == 1);
     send_window_key(&app, &playback, (CcKey)'=', true);
     advance_volume_overlay(&app, &playback, 10);
-    assert(gc_audio_menu_volume(audio) == GC_AUDIO_MENU_VOLUME_MAX);
+    assert(gc_audio_menu_volume(audio) == 800);
     advance_volume_overlay(&app, &playback, 5);
-    assert(gc_audio_menu_volume(audio) == GC_AUDIO_MENU_VOLUME_MAX);
+    assert(gc_audio_menu_volume(audio) == 800);
     send_window_key(&app, &playback, (CcKey)'=', false);
     send_window_key(&app, &playback, (CcKey)'-', true);
     send_window_key(&app, &playback, (CcKey)'=', true);
@@ -524,7 +534,7 @@ static void test_paused_volume_recording(void) {
     volume_last_alpha = 1;
     volume_recording_scene = scene;
     volume_recording_submissions = 0;
-    gc_scene_volume_indicator(scene, 110, 1);
+    gc_scene_volume_indicator(scene, 200, 1);
     assert(present_volume_overlay(&app, &playback));
     assert(volume_recording_submissions == 1 && !playback.volume_overlay_changed);
     assert(app.counter == 0 && playback.frames == 37 && !playback.history_changed);

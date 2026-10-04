@@ -26,22 +26,22 @@ static void test_bar_pixels(GcScene *scene) {
 
     gc_scene_volume_indicator(scene, 100, 1);
     gc_scene_draw_wait(scene);
-    assert(pixel(scene->platform, 496, 21) == 255);
+    assert(pixel(scene->platform, 488, 21) == 255);
     unsigned track = pixel(scene->platform, 552, 21);
     assert(track >= 55 && track <= 57);
-    assert(pixel(scene->platform, 500, 21) == 255);
-    assert(pixel(scene->platform, 503, 21) == track);
+    assert(pixel(scene->platform, 494, 21) == 255);
+    assert(pixel(scene->platform, 497, 21) == track);
     assert(pixel(scene->platform, 480, 20) == 0);
     assert(pixel(scene->platform, 482, 20) == 255);
     assert(pixel(scene->platform, 607, 20) == 0);
-    assert(pixel(scene->platform, 496, 19) == 0);
-    assert(pixel(scene->platform, 496, 24) == 0);
+    assert(pixel(scene->platform, 488, 19) == 0);
+    assert(pixel(scene->platform, 488, 24) == 0);
     assert(pixel(scene->platform, 608, 22) == 0);
 
     gc_scene_volume_indicator(scene, 0, 1);
     gc_scene_draw_wait(scene);
-    assert(pixel(scene->platform, 496, 21) == track);
-    gc_scene_volume_indicator(scene, 5, 1);
+    assert(pixel(scene->platform, 488, 21) == track);
+    gc_scene_volume_indicator(scene, 10, 1);
     gc_scene_draw_wait(scene);
     assert(pixel(scene->platform, 480, 21) == 255);
     assert(pixel(scene->platform, 482, 21) == track);
@@ -88,11 +88,11 @@ static void test_redraw_preserves_clock(GcScene *scene) {
     assert(scene->animation_elapsed == 3 && scene->animation_fraction == 0.75);
     assert(scene->ui_ticks == 123 && scene->card_ticks == 456);
     assert(scene->menu_animation.oscillator_phase == 789);
-    assert(pixel(scene->platform, 496, 21) == 255);
+    assert(pixel(scene->platform, 488, 21) == 255);
 
     scene->inspection_fade_alpha = 255;
     gc_scene_draw_wait(scene);
-    assert(pixel(scene->platform, 496, 21) == 255);
+    assert(pixel(scene->platform, 488, 21) == 255);
     assert(scene->ui_ticks == 123 && scene->card_ticks == 456);
 }
 
@@ -135,7 +135,7 @@ static void test_redraw_after_rewind(GcScene *scene) {
         assert(scene->card_lighting.focus[0] == 50);
         assert(scene->perspective);
     }
-    assert(pixel(scene->platform, 496, 21) > pixel(scene->platform, 560, 21));
+    assert(pixel(scene->platform, 488, 21) > pixel(scene->platform, 560, 21));
     gc_frame_history_destroy(history);
 }
 
@@ -163,7 +163,7 @@ static void test_frozen_pose(GcScene *scene, gc_menu *menu, GcScene *before) {
     gc_scene_volume_indicator(scene, 100, 1);
     gc_scene_redraw(scene, menu);
     assert_native_state(before, scene);
-    assert(pixel(scene->platform, 496, 21) == 255);
+    assert(pixel(scene->platform, 488, 21) == 255);
     gc_scene_volume_indicator(scene, 100, 0);
 }
 

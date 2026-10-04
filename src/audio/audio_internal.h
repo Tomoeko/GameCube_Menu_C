@@ -257,7 +257,7 @@ struct GcAudio {
     atomic_uint event_read;
     atomic_uint event_write;
     atomic_bool mono;
-    /* -100..500 adjustment; zero preserves the original 100-percent level. */
+    /* -100..700 adjustment; zero preserves the original 100-percent level. */
     atomic_int menu_volume_adjustment;
     atomic_uint dropped_events;
     atomic_uint active_voices;

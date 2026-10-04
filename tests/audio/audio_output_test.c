@@ -293,7 +293,7 @@ static void test_capture_overflow_and_reset(void) {
 static void test_menu_volume_output(void) {
     int16_t samples[257];
     for (size_t index = 0; index < 257; ++index)
-        samples[index] = 12000;
+        samples[index] = 4000;
     GcAudio *audio = test_audio(48000, samples);
     audio->voices[0].menu_music = true;
     audio->voices[1] = audio->voices[0];
@@ -312,10 +312,24 @@ static void test_menu_volume_output(void) {
     assert(!gc_audio_set_menu_volume(audio, GC_AUDIO_MENU_VOLUME_MAX + 1));
     assert(gc_audio_menu_volume(audio) == 100);
     assert(gc_audio_capture_begin(audio, 1024));
-    const unsigned volumes[] = {100, 50, 0, 100, 200, GC_AUDIO_MENU_VOLUME_MAX, 100};
-    for (unsigned phase = 0; phase < sizeof(volumes) / sizeof(*volumes); ++phase) {
-        assert(gc_audio_set_menu_volume(audio, volumes[phase]));
-        assert(gc_audio_menu_volume(audio) == volumes[phase]);
+    const struct {
+        unsigned percent;
+        float gain;
+    } levels[] = {{100, 1},
+                  {50, 0.5f},
+                  {0, 0},
+                  {100, 1},
+                  {200, 2},
+                  {300, 3},
+                  {400, 4},
+                  {500, 5},
+                  {600, 6},
+                  {700, 7},
+                  {GC_AUDIO_MENU_VOLUME_MAX, 8},
+                  {100, 1}};
+    for (unsigned phase = 0; phase < sizeof(levels) / sizeof(*levels); ++phase) {
+        assert(gc_audio_set_menu_volume(audio, levels[phase].percent));
+        assert(gc_audio_menu_volume(audio) == levels[phase].percent);
         gc_audio_render(audio, rendered, 1024);
         gc_audio_render(effects, expected_effects, 1024);
         gc_audio_render(music, original_music, 1024);
@@ -326,7 +340,7 @@ static void test_menu_volume_output(void) {
         for (unsigned frame = 768; frame < 1024; ++frame) {
             float effect = rendered[frame * 2 + 1];
             assert(effect == expected_effects[frame * 2 + 1]);
-            float expected = original_music[frame * 2] * (float)volumes[phase] / 100;
+            float expected = original_music[frame * 2] * levels[phase].gain;
             assert(fabsf(rendered[frame * 2] - expected) < 2.0f / 32768);
         }
     }
@@ -409,6 +423,7 @@ static void test_warm_music_stem(unsigned revision, unsigned rate, bool music) {
     assert(gc_audio_capture_begin(audio, 512));
     const unsigned volumes[] = {
         100, 0, GC_AUDIO_MENU_VOLUME_MAX, 50, GC_AUDIO_MENU_VOLUME_MAX, 100};
+    const float gains[] = {1, 0, 8, 0.5f, 8, 1};
     uint64_t host_frames = 0;
     bool heard_stem = false;
     for (unsigned phase = 0; phase < sizeof(volumes) / sizeof(*volumes); ++phase) {
@@ -446,8 +461,7 @@ static void test_warm_music_stem(unsigned revision, unsigned rate, bool music) {
                         assert(contribution[channel] == 0);
                     float expected = baseline[frame * 2 + channel];
                     if (volumes[phase] != 100)
-                        expected +=
-                            ((float)volumes[phase] / 100 - 1) * contribution[channel];
+                        expected += (gains[phase] - 1) * contribution[channel];
                     assert(rendered[frame * 2 + channel] == normalized_limit(expected));
                 }
             }
