@@ -19,13 +19,17 @@ GcAudio *gc_audio_create(const char *ipl_path, unsigned sample_rate) {
     audio->output_resampler = cc_audio_resampler_create(64057, 2, sample_rate);
     audio->output_state = cc_audio_resample_state_create(
         cc_audio_resampler_taps(audio->output_resampler));
-    if (!audio->output_resampler || !audio->output_state) {
+    audio->music_output_state = cc_audio_resample_state_create(
+        cc_audio_resampler_taps(audio->output_resampler));
+    if (!audio->output_resampler || !audio->output_state ||
+        !audio->music_output_state) {
         gc_audio_destroy(audio);
         return NULL;
     }
     atomic_init(&audio->event_read, 0);
     atomic_init(&audio->event_write, 0);
     atomic_init(&audio->mono, false);
+    atomic_init(&audio->menu_volume_adjustment, 0);
     atomic_init(&audio->dropped_events, 0);
     gc_audio_reset(audio);
     return audio;
@@ -38,6 +42,7 @@ void gc_audio_destroy(GcAudio *audio) {
     gc_audio_capture_end(audio);
     gc_audio_resources_release(audio);
     cc_audio_resample_state_destroy(audio->output_state);
+    cc_audio_resample_state_destroy(audio->music_output_state);
     cc_audio_resampler_destroy(audio->output_resampler);
     free(audio);
 }
@@ -50,6 +55,7 @@ void gc_audio_reset(GcAudio *audio) {
     memset(audio->voices, 0, sizeof(audio->voices));
     memset(audio->pending_events, 0, sizeof(audio->pending_events));
     cc_audio_resample_state_reset(audio->output_state);
+    cc_audio_resample_state_reset(audio->music_output_state);
     memset(audio->surround_delay, 0, sizeof(audio->surround_delay));
     memset(audio->chorus, 0, sizeof(audio->chorus));
     for (unsigned index = 0; index < 4; ++index) {
@@ -63,6 +69,10 @@ void gc_audio_reset(GcAudio *audio) {
     audio->chorus_read = audio->sequence_revision ? 150u * 65536u : 0;
     audio->chorus_direction = audio->sequence_revision ? -1 : 0;
     audio->chorus_write = audio->chorus_frame = audio->dsp_frame = 0;
+    memset(&audio->music_output, 0, sizeof(audio->music_output));
+    memcpy(audio->music_output.effects, audio->effects, sizeof(audio->effects));
+    audio->music_output.chorus_read = audio->chorus_read;
+    audio->music_output.chorus_direction = audio->chorus_direction;
     audio->native_counter = 0;
     audio->sequence_ticks = audio->notes_started = 0;
     audio->rejected_commands = 0;
@@ -130,14 +140,45 @@ void gc_audio_set_mono(GcAudio *audio, bool mono) {
         atomic_store_explicit(&audio->mono, mono, memory_order_relaxed);
 }
 
+bool gc_audio_set_menu_volume(GcAudio *audio, unsigned percent) {
+    if (!audio || percent > GC_AUDIO_MENU_VOLUME_MAX)
+        return false;
+    atomic_store_explicit(&audio->menu_volume_adjustment, (int)percent - 100,
+                          memory_order_relaxed);
+    return true;
+}
+
+unsigned gc_audio_menu_volume(const GcAudio *audio) {
+    return audio ? (unsigned)(100 + atomic_load_explicit(&audio->menu_volume_adjustment,
+                                                         memory_order_relaxed))
+                 : 0;
+}
+
+enum { NATIVE_OUTPUT_BATCH = 8 };
+
 typedef struct {
     GcAudio *audio;
     bool mono;
+    unsigned written;
+    unsigned read;
+    float music[NATIVE_OUTPUT_BATCH][2];
 } NativeOutput;
 
 static bool native_output_frame(void *context, float stereo[2]) {
     NativeOutput *output = context;
     gc_audio_dsp_render_frame(output->audio, output->mono, stereo);
+    if (output->written >= NATIVE_OUTPUT_BATCH)
+        return false;
+    memcpy(output->music[output->written++], output->audio->music_output.stereo,
+           sizeof(output->music[0]));
+    return true;
+}
+
+static bool music_output_frame(void *context, float stereo[2]) {
+    NativeOutput *output = context;
+    if (output->read >= output->written)
+        return false;
+    memcpy(stereo, output->music[output->read++], sizeof(output->music[0]));
     return true;
 }
 
@@ -147,14 +188,44 @@ void gc_audio_render(GcAudio *audio, float *stereo, size_t frames) {
     memset(stereo, 0, frames * 2 * sizeof(*stereo));
     if (!audio || !frames)
         return;
-    NativeOutput output = {audio,
-                           atomic_load_explicit(&audio->mono, memory_order_relaxed)};
-    /* Preserve the recovered 64057/2 DAC clock and fixed-point DSP buses.
-     * Only host reconstruction changes. Its causal delay (~3 ms at 48 kHz)
-     * is identical in device output and the captured recording stream.
+    NativeOutput output = {
+        .audio = audio,
+        .mono = atomic_load_explicit(&audio->mono, memory_order_relaxed)};
+    float menu_gain = (float)gc_audio_menu_volume(audio) / 100;
+    /* Preserve the recovered 64057/2 DAC clock and fixed-point DSP buses at
+     * every host volume. The original full mix and music stem stay warm,
+     * so mute/boost jumps retain their original gain and effect histories.
+     * At 100 percent, no host gain arithmetic changes the output. Custom
+     * levels decompose the native fixed-point mix after reconstruction;
+     * nonlinear native saturation/rounding cannot be perfectly separated.
+     * Its causal delay (~3 ms at 48 kHz) is identical in device output and
+     * the captured recording stream.
      */
-    cc_audio_resampler_render(audio->output_resampler, audio->output_state,
-                              native_output_frame, &output, stereo, frames);
+    /* Both reconstruction states consume each generated native frame once.
+     * At the minimum host rate, a host frame consumes at most five source
+     * frames (64057/2 -> 8000), including initial priming. The bounded batch
+     * keeps music and full output phases identical without callback allocation.
+     */
+    for (size_t frame = 0; frame < frames; ++frame) {
+        output.read = output.written = 0;
+        cc_audio_resampler_frame(audio->output_resampler, audio->output_state,
+                                 native_output_frame, &output, stereo + frame * 2);
+        float music[2];
+        cc_audio_resampler_frame(audio->output_resampler, audio->music_output_state,
+                                 music_output_frame, &output, music);
+        if (menu_gain != 1) {
+            stereo[frame * 2] += (menu_gain - 1) * music[0];
+            stereo[frame * 2 + 1] += (menu_gain - 1) * music[1];
+        }
+    }
+    /* Reconstruction can overshoot bounded DSP samples at sharp edges.
+     * Device output and recordings share this final normalized-PCM limit. */
+    for (size_t sample = 0; sample < frames * 2; ++sample) {
+        if (stereo[sample] > 1)
+            stereo[sample] = 1;
+        else if (stereo[sample] < -1)
+            stereo[sample] = -1;
+    }
     unsigned active = 0;
     for (unsigned voice = 0; voice < GC_AUDIO_VOICES; ++voice)
         active += audio->voices[voice].active ? 1u : 0u;

@@ -90,5 +90,6 @@ void gc_render_card_number(GcScene *scene, unsigned number, const char name[4]);
 void gc_render_prompts(GcScene *scene, const gc_menu *menu);
 void gc_render_grid_lights(GcScene *scene, const GcCardGridLighting *lighting);
 void gc_render_grid(GcScene *scene, double time);
+void gc_render_volume_overlay(GcScene *scene);
 
 #endif

@@ -124,6 +124,8 @@ typedef struct {
     bool frame_counter_enabled;
     uint64_t frame_counter;
     uint8_t inspection_fade_alpha;
+    unsigned volume_indicator_percent; /* Host overlay; outside frame history. */
+    float volume_indicator_alpha;
 } GcScene;
 
 bool gc_scene_init(GcScene *scene, CcPlatform *platform, const char *ipl_path);
@@ -159,8 +161,12 @@ void gc_scene_set_boot(GcScene *scene, const GcBootConfig *config,
 bool gc_scene_can_press(const GcScene *scene, const gc_menu *menu, gc_button button);
 /* Inspection overlay uses the original font after the inspection fader. */
 void gc_scene_frame_counter(GcScene *scene, uint64_t counter);
+/* Host menu-volume overlay; does not advance or rewind scene animation. */
+void gc_scene_volume_indicator(GcScene *scene, unsigned percent, float alpha);
 /* Clear an inspection/start-delay frame without advancing visual counters. */
 void gc_scene_draw_wait(GcScene *scene);
 void gc_scene_draw(GcScene *scene, const gc_menu *menu);
+/* Refresh host overlays at the last native pose without updating controllers. */
+void gc_scene_redraw(GcScene *scene, const gc_menu *menu);
 
 #endif

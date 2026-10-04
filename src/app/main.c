@@ -575,7 +575,7 @@ static bool advance_video_tick(AppRuntime *app) {
     return true;
 }
 
-static void draw_video_frame(AppRuntime *app) {
+static void draw_video_frame_mode(AppRuntime *app, bool update_animation) {
     GcFrameRuntime *runtime = app->runtime;
     uint8_t alpha = runtime->launching ? (uint8_t)runtime->launch.alpha
                     : app->menu->page == GC_PAGE_STARTUP ? (uint8_t)app->boot->fader
@@ -583,16 +583,24 @@ static void draw_video_frame(AppRuntime *app) {
     app->scene->test_error_alpha = gc_error_control_alpha(&runtime->error);
     if (app->inspection)
         gc_scene_frame_counter(app->scene, app->counter);
-    if (app->inspection || app->scene->test_error_alpha) {
+    if (app->inspection || app->scene->test_error_alpha ||
+        app->scene->volume_indicator_alpha > 0) {
         app->scene->inspection_fade_alpha = alpha;
         cc_platform_set_fade_alpha(app->scene->platform, 0);
     } else
         cc_platform_set_fade_alpha(app->scene->platform, (float)alpha / 255);
     if (runtime->startup_waiting)
         gc_scene_draw_wait(app->scene);
-    else
+    else if (update_animation)
         gc_scene_draw(app->scene,
                       runtime->launch_menu ? runtime->launch_menu : app->menu);
+    else
+        gc_scene_redraw(app->scene,
+                        runtime->launch_menu ? runtime->launch_menu : app->menu);
+}
+
+static void draw_video_frame(AppRuntime *app) {
+    draw_video_frame_mode(app, true);
 }
 
 static bool save_video_frame(AppRuntime *app) {
@@ -618,15 +626,97 @@ typedef struct {
     bool fullscreen_key_held;
     bool restart_key_held;
     bool restart_requested;
+    unsigned volume_keys_held;
+    double volume_repeat_elapsed;
+    double volume_indicator_remaining;
+    double volume_refresh_elapsed;
+    bool volume_overlay_changed;
     unsigned long frames;
     double last;
 } AppPlayback;
+
+enum { MENU_VOLUME_STEP = 10 };
+
+static void adjust_menu_volume(AppRuntime *app, AppPlayback *playback,
+                               unsigned direction, unsigned steps) {
+    unsigned volume = gc_audio_menu_volume(app->audio);
+    unsigned change = steps * MENU_VOLUME_STEP;
+    if (direction == 1)
+        volume = volume < change ? 0 : volume - change;
+    else
+        volume = change > GC_AUDIO_MENU_VOLUME_MAX - volume ? GC_AUDIO_MENU_VOLUME_MAX
+                                                            : volume + change;
+    gc_audio_set_menu_volume(app->audio, volume);
+    playback->volume_indicator_remaining = 1.8;
+    playback->volume_overlay_changed = true;
+    gc_scene_volume_indicator(app->scene, volume, 1);
+}
+
+/* This host overlay remains responsive while native frame stepping is paused. */
+static void advance_volume_overlay(AppRuntime *app, AppPlayback *playback,
+                                   double elapsed) {
+    if (!isfinite(elapsed) || elapsed < 0)
+        return;
+    if (!playback->volume_keys_held && playback->volume_indicator_remaining == 0 &&
+        !playback->volume_overlay_changed && app->scene->volume_indicator_alpha == 0)
+        return;
+    playback->volume_refresh_elapsed += elapsed;
+    if (playback->volume_keys_held) {
+        if (playback->volume_keys_held != 3) {
+            playback->volume_repeat_elapsed += elapsed;
+            if (playback->volume_repeat_elapsed >= 0.1) {
+                unsigned steps =
+                    (unsigned)fmin(GC_AUDIO_MENU_VOLUME_MAX / MENU_VOLUME_STEP,
+                                   floor(playback->volume_repeat_elapsed / 0.1));
+                playback->volume_repeat_elapsed =
+                    fmod(playback->volume_repeat_elapsed, 0.1);
+                adjust_menu_volume(app, playback, playback->volume_keys_held, steps);
+            }
+        } else
+            playback->volume_repeat_elapsed = -0.25;
+        playback->volume_indicator_remaining = 1.8;
+    } else {
+        playback->volume_indicator_remaining =
+            fmax(0, playback->volume_indicator_remaining - elapsed);
+    }
+    float alpha = (float)fmin(1, playback->volume_indicator_remaining / 1.2);
+    if (alpha != app->scene->volume_indicator_alpha) {
+        gc_scene_volume_indicator(app->scene, gc_audio_menu_volume(app->audio), alpha);
+        playback->volume_overlay_changed = true;
+    }
+}
+
+static void volume_overlay_presented(AppPlayback *playback) {
+    playback->volume_overlay_changed = false;
+    playback->volume_refresh_elapsed = 0;
+}
+
+static bool present_volume_overlay(AppRuntime *app, AppPlayback *playback) {
+    draw_video_frame_mode(app, false);
+    volume_overlay_presented(playback);
+    return record_video_frame(app);
+}
 
 static bool host_control_key(AppRuntime *app, AppPlayback *playback,
                              const CcEvent *event) {
     if (event->type != CC_EVENT_KEY_DOWN && event->type != CC_EVENT_KEY_UP)
         return false;
     bool down = event->type == CC_EVENT_KEY_DOWN;
+    if (event->key == '-' || event->key == '=' || event->key == '+') {
+        unsigned mask = event->key == '-' ? 1u : 2u;
+        bool was_held = (playback->volume_keys_held & mask) != 0;
+        if (down && event->key_repeat && !was_held)
+            return true;
+        if (down)
+            playback->volume_keys_held |= mask;
+        else
+            playback->volume_keys_held &= ~mask;
+        if (down && !was_held && !event->key_repeat) {
+            adjust_menu_volume(app, playback, mask, 1);
+            playback->volume_repeat_elapsed = -0.25;
+        }
+        return true;
+    }
     if (down && event->key_repeat &&
         (event->key == 'r' || event->key == 'R' || event->key == 'f' ||
          event->key == 'F' || event->key == CC_KEY_ESCAPE))
@@ -700,6 +790,8 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
             playback->escape_window_control = false;
             playback->fullscreen_key_held = false;
             playback->restart_key_held = false;
+            playback->volume_keys_held = 0;
+            playback->volume_repeat_elapsed = -0.25;
         }
         if (host_control_key(app, playback, &event))
             continue;
@@ -794,6 +886,7 @@ static bool restart_startup(AppRuntime *app, const GcAppOptions *options,
     playback->restart_requested = false;
     playback->history_changed = false;
     draw_video_frame(app);
+    volume_overlay_presented(playback);
     if (!record_video_frame(app) || !save_video_frame(app))
         return false;
     ++playback->frames;
@@ -835,6 +928,7 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
         playback.last = now;
         if (!playback.running)
             break;
+        advance_volume_overlay(app, &playback, elapsed);
         if (!cc_recording_pump(app->recording, now)) {
             fprintf(stderr, "Recording failed: %s\n",
                     cc_recording_error(app->recording));
@@ -883,6 +977,7 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                 ++app->counter;
             }
             draw_video_frame(app);
+            volume_overlay_presented(&playback);
             if (!record_video_frame(app) || (!restored && !save_video_frame(app))) {
                 playback.running = false;
                 result = EXIT_FAILURE;
@@ -905,6 +1000,12 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                         break;
                     }
                 }
+            }
+        } else if (playback.volume_overlay_changed &&
+                   playback.volume_refresh_elapsed >= 1.0 / 60) {
+            if (!present_volume_overlay(app, &playback)) {
+                result = EXIT_FAILURE;
+                break;
             }
         }
         struct timespec delay = {.tv_nsec = 1000000};
@@ -1138,6 +1239,14 @@ int main(int argc, char **argv) {
                       .timed_start = options.timed_start,
                       .startup_delay_ticks = delay_ticks,
                       .audio_started = audio_started};
+    application_exit_requested = 0;
+    void (*previous_interrupt)(int) = signal(SIGINT, request_application_exit);
+    void (*previous_terminate)(int) = signal(SIGTERM, request_application_exit);
+    if (previous_interrupt == SIG_ERR || previous_terminate == SIG_ERR) {
+        fprintf(stderr, "Could not install application exit handlers.\n");
+        running = false;
+        result = EXIT_FAILURE;
+    }
     if (running && options.record) {
         app.recording = gc_recording_open_with_audio(
             platform, audio, scene.startup.frame_rate, !options.inspect_frames,
@@ -1149,10 +1258,7 @@ int main(int argc, char **argv) {
         } else
             fprintf(stderr, "Recording: %s\n", cc_recording_path(app.recording));
     }
-    application_exit_requested = 0;
-    void (*previous_interrupt)(int) = signal(SIGINT, request_application_exit);
-    void (*previous_terminate)(int) = signal(SIGTERM, request_application_exit);
-    if (running)
+    if (running && !application_exit_requested)
         result = run_application(&app, &options);
     double recording_end = NAN;
     bool recording_clock_valid = !app.recording || seconds_now(&recording_end);

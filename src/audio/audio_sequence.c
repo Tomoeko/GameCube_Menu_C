@@ -470,6 +470,19 @@ static void refresh_voice_controls(const GcAudio *audio, GcAudioVoice *voice) {
     voice->track_reverb = inherited_parameter(audio, voice->track, 2);
 }
 
+static bool menu_music_track(const GcAudio *audio, unsigned index) {
+    /* Retain this identity on the voice: released tails can outlive or be
+     * reparented away from the sequence track that created them. */
+    for (unsigned depth = 0; index < GC_AUDIO_TRACKS && depth < GC_AUDIO_TRACKS;
+         ++depth) {
+        const GcAudioTrack *track = &audio->tracks[index];
+        if (track->id == 0x21001)
+            return true;
+        index = track->parent;
+    }
+    return false;
+}
+
 static float route_component(const GcAudio *audio, unsigned selector, unsigned route,
                              float pan, float reverb) {
     if (!selector)
@@ -683,6 +696,7 @@ static bool start_note(GcAudio *audio, unsigned index, unsigned key, unsigned sl
     voice->active = true;
     voice->track = index;
     voice->owner_track = index;
+    voice->menu_music = menu_music_track(audio, index);
     voice->slot = slot;
     track->note_voices[slot] = voice_index;
     voice->wave = wave;

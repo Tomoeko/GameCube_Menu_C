@@ -155,6 +155,7 @@ typedef struct {
 typedef struct {
     bool active;
     bool detached;
+    bool menu_music;
     bool on_release_list;
     unsigned track;
     unsigned owner_track;
@@ -201,6 +202,17 @@ typedef struct {
     int16_t delay[GC_AUDIO_EFFECT_SAMPLES];
 } GcAudioEffect;
 
+typedef struct {
+    GcAudioEffect effects[4];
+    int16_t chorus[160];
+    uint32_t chorus_read;
+    unsigned chorus_write;
+    unsigned chorus_frame;
+    int chorus_direction;
+    int16_t surround_delay[80];
+    float stereo[2];
+} GcAudioMusicOutput;
+
 struct GcAudio {
     unsigned sample_rate;
     unsigned tempo;
@@ -222,6 +234,8 @@ struct GcAudio {
     int16_t resampling_coefficients[64][4];
     CcAudioResampler *output_resampler;
     CcAudioResampleState *output_state;
+    CcAudioResampleState *music_output_state;
+    GcAudioMusicOutput music_output;
     bool render_mono;
     GcAudioEffect effects[4];
     int16_t chorus[160];
@@ -243,6 +257,8 @@ struct GcAudio {
     atomic_uint event_read;
     atomic_uint event_write;
     atomic_bool mono;
+    /* -100..500 adjustment; zero preserves the original 100-percent level. */
+    atomic_int menu_volume_adjustment;
     atomic_uint dropped_events;
     atomic_uint active_voices;
     atomic_bool sequence_stopped;

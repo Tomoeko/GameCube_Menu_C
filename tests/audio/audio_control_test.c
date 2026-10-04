@@ -10,6 +10,7 @@ static GcAudio *start_sequence(unsigned revision, uint8_t *sequence, size_t size
     GcAudio *audio = calloc(1, sizeof(*audio));
     assert(audio);
     atomic_init(&audio->mono, false);
+    atomic_init(&audio->menu_volume_adjustment, 0);
     atomic_init(&audio->event_read, 0);
     atomic_init(&audio->event_write, 0);
     audio->sequence_revision = revision;
@@ -740,6 +741,39 @@ static void test_gate_zero_and_bounds(unsigned revision) {
     free(audio);
 }
 
+static void test_menu_music_identity(unsigned revision) {
+    /* A music child inherits the menu identity without replacing its own ID.
+     * A release tail retains the tag after its track is stopped/recycled. */
+    uint8_t sequence[48] = {
+        0xd0, 0, 2, 0x10, 1, 0xc1, 0, 0, 0, 32, 0x80, 255,
+    };
+    const uint8_t child[] = {60, 1, 127, 0x80, 255};
+    memcpy(sequence + 32, child, sizeof(child));
+    GcAudio *audio = start_sequence(revision, sequence, sizeof(sequence));
+    GcAudioVoice *voice = &audio->voices[0];
+    assert(voice->active && voice->menu_music);
+    voice->base_gain = voice->track_gain = voice->envelope_volume = 1;
+    voice->buses[0] = 1;
+    voice->routes[0] = revision ? 0x100 : 0x10;
+    assert(gc_audio_route_gain(audio, voice, 0, false) == 1);
+    assert(gc_audio_set_menu_volume(audio, 50));
+    assert(gc_audio_route_gain(audio, voice, 0, false) == 1);
+    voice->menu_music = false;
+    assert(gc_audio_route_gain(audio, voice, 0, false) == 1);
+    voice->menu_music = true;
+    assert(gc_audio_stop_sequence(audio));
+    gc_audio_sequence_tick(audio);
+    assert(voice->menu_music && voice->detached);
+    assert(gc_audio_route_gain(audio, voice, 0, false) == 1);
+    assert(gc_audio_menu_volume(audio) == 50);
+    free(audio);
+
+    sequence[4] = 2; /* The startup track and its descendants are not music. */
+    audio = start_sequence(revision, sequence, sizeof(sequence));
+    assert(audio->voices[0].active && !audio->voices[0].menu_music);
+    free(audio);
+}
+
 int main(void) {
     for (unsigned revision = 0; revision < 2; ++revision) {
         test_signed_register_target(revision);
@@ -766,6 +800,7 @@ int main(void) {
         test_ramp_final_step(revision);
         test_regional_gate_rounding(revision);
         test_gate_zero_and_bounds(revision);
+        test_menu_music_identity(revision);
     }
     test_live_release_pointer_guard(false);
     test_live_release_pointer_guard(true);

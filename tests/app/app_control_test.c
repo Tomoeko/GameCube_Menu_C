@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "gamecube/render.h"
 #include "render/software/software.h"
+#include "audio/audio_internal.h"
+#include "app/recording.h"
 
 #include <assert.h>
 #include <dirent.h>
@@ -14,6 +16,11 @@ static bool test_poll(CcPlatform *platform, CcEvent *event);
 static bool test_is_fullscreen(CcPlatform *platform);
 static bool test_set_fullscreen(CcPlatform *platform, bool fullscreen);
 static void test_draw(GcScene *scene, const gc_menu *menu);
+static void test_redraw(GcScene *scene, const gc_menu *menu);
+static bool test_recording_frame(CcRecording *recording, double now);
+static CcRecording *test_recording_open(CcPlatform *platform, GcAudio *audio,
+                                        unsigned video_rate, bool audible,
+                                        bool half_size, CcCaptureAudioMode mode);
 
 /* Mock only the host clock/event boundary. The actual CLI, configuration,
  * native controllers, resource decoder and scene renderer remain active.
@@ -23,10 +30,16 @@ static void test_draw(GcScene *scene, const gc_menu *menu);
 #define cc_platform_is_fullscreen test_is_fullscreen
 #define cc_platform_set_fullscreen test_set_fullscreen
 #define gc_scene_draw test_draw
+#define gc_scene_redraw test_redraw
+#define cc_recording_frame test_recording_frame
+#define gc_recording_open_with_audio test_recording_open
 #define main test_application_main
 #include "app/main.c"
 #undef main
 #undef gc_scene_draw
+#undef gc_scene_redraw
+#undef cc_recording_frame
+#undef gc_recording_open_with_audio
 #undef cc_platform_poll
 #undef cc_platform_is_fullscreen
 #undef cc_platform_set_fullscreen
@@ -50,6 +63,42 @@ static unsigned window_requests;
 static bool test_recording_events;
 static bool recording_fail_clock_on_quit;
 static bool recording_clock_failed;
+static bool recording_interrupt_on_open;
+static volatile sig_atomic_t retained_signal_calls;
+static bool test_volume_events;
+static unsigned volume_poll_ticks;
+static unsigned redrawn_frames;
+static float volume_last_alpha;
+static GcScene *volume_recording_scene;
+static unsigned volume_recording_submissions;
+static bool volume_recording_failure;
+
+static bool test_recording_frame(CcRecording *recording, double now) {
+    if (volume_recording_scene) {
+        uint8_t rgba[4];
+        assert(gc_software_read_pixel(volume_recording_scene->platform, 496, 21, rgba));
+        assert(rgba[0] == 255 && rgba[1] == 255 && rgba[2] == 255 && rgba[3] == 255);
+        ++volume_recording_submissions;
+        if (volume_recording_failure)
+            return false;
+    }
+    return cc_recording_frame(recording, now);
+}
+
+static void retained_test_signal(int signal_number) {
+    (void)signal_number;
+    ++retained_signal_calls;
+}
+
+static CcRecording *test_recording_open(CcPlatform *platform, GcAudio *audio,
+                                        unsigned video_rate, bool audible,
+                                        bool half_size, CcCaptureAudioMode mode) {
+    CcRecording *recording = gc_recording_open_with_audio(platform, audio, video_rate,
+                                                          audible, half_size, mode);
+    if (recording && recording_interrupt_on_open)
+        assert(raise(SIGTERM) == 0);
+    return recording;
+}
 
 static bool test_is_fullscreen(CcPlatform *platform) {
     (void)platform;
@@ -135,6 +184,12 @@ static int test_clock(clockid_t clock_id, struct timespec *value) {
     (void)clock_id;
     if (clock_failure || recording_clock_failed)
         return -1;
+    if (test_volume_events) {
+        *value =
+            (struct timespec){.tv_sec = volume_poll_ticks / 10,
+                              .tv_nsec = (long)(volume_poll_ticks % 10) * 100000000};
+        return 0;
+    }
     if (test_recording_events) {
         *value = (struct timespec){.tv_sec = event_phase / 8,
                                    .tv_nsec = (long)(event_phase % 8) * 125000000};
@@ -160,6 +215,22 @@ static bool test_poll(CcPlatform *platform, CcEvent *event) {
         return poll_restart_events(event);
     if (test_recording_events)
         return poll_recording_events(event);
+    if (test_volume_events) {
+        unsigned phase = event_phase++;
+        if (phase == 0 || phase == 2) {
+            *event = (CcEvent){.type = phase ? CC_EVENT_KEY_UP : CC_EVENT_KEY_DOWN,
+                               .key = (CcKey)'='};
+            return true;
+        }
+        if (phase == 24) {
+            assert(drawn_counter == 0 && drawn_frames == 1 && redrawn_frames > 5);
+            assert(volume_last_alpha == 0);
+            event->type = CC_EVENT_QUIT;
+            return true;
+        }
+        ++volume_poll_ticks;
+        return false;
+    }
     switch (event_phase++) {
         case 0:
         case 3:
@@ -211,6 +282,18 @@ static void test_draw(GcScene *scene, const gc_menu *menu) {
         assert(menu->cards[slot].status ==
                (absent_mask & (1u << slot) ? GC_CARD_ABSENT : GC_CARD_READY));
     gc_scene_draw(scene, menu);
+}
+
+static void test_redraw(GcScene *scene, const gc_menu *menu) {
+    assert(test_volume_events && scene->frame_counter == 0 && menu->page_elapsed == 0);
+    assert(scene->volume_indicator_percent == 110);
+    assert(scene->volume_indicator_alpha <= volume_last_alpha);
+    volume_last_alpha = scene->volume_indicator_alpha;
+    ++redrawn_frames;
+    uint64_t ticks = scene->ui_ticks;
+    double fraction = scene->animation_fraction;
+    gc_scene_redraw(scene, menu);
+    assert(scene->ui_ticks == ticks && scene->animation_fraction == fraction);
 }
 
 static void send_window_event(AppRuntime *app, AppPlayback *playback, CcEvent event) {
@@ -333,6 +416,133 @@ static void test_window_controls(void) {
     test_window_events = false;
 }
 
+static void test_music_volume_controls(void) {
+    GcAudio *audio = calloc(1, sizeof(*audio));
+    assert(audio);
+    atomic_init(&audio->menu_volume_adjustment, 0);
+    gc_menu menu;
+    gc_menu_init(&menu, GC_REGION_USA);
+    GcScene scene = {0};
+    GcFrameRuntime runtime = {.startup_waiting = true};
+    AppRuntime app = {
+        .menu = &menu, .scene = &scene, .runtime = &runtime, .audio = audio};
+    AppPlayback playback = {.running = true};
+    test_window_events = true;
+    send_window_key(&app, &playback, (CcKey)'=', true);
+    assert(gc_audio_menu_volume(audio) == 110);
+    assert(scene.volume_indicator_alpha == 1);
+    assert(scene.volume_indicator_percent == 110);
+    send_window_key(&app, &playback, (CcKey)'=', false);
+    send_window_key(&app, &playback, (CcKey)'-', true);
+    assert(gc_audio_menu_volume(audio) == 100);
+    send_window_key(&app, &playback, (CcKey)'-', true);
+    assert(gc_audio_menu_volume(audio) == 100);
+    send_window_key(&app, &playback, (CcKey)'-', false);
+    for (unsigned press = 0; press < 12; ++press) {
+        send_window_key(&app, &playback, (CcKey)'-', true);
+        send_window_key(&app, &playback, (CcKey)'-', false);
+    }
+    assert(gc_audio_menu_volume(audio) == 0);
+    send_window_key(&app, &playback, (CcKey)'+', true);
+    send_window_key(&app, &playback, (CcKey)'=', true);
+    assert(gc_audio_menu_volume(audio) == 10); /* Shift shares the same held key. */
+    send_window_event(
+        &app, &playback,
+        (CcEvent){.type = CC_EVENT_KEY_DOWN, .key = (CcKey)'=', .key_repeat = true});
+    assert(gc_audio_menu_volume(audio) == 10);
+    advance_volume_overlay(&app, &playback, 0.34);
+    assert(gc_audio_menu_volume(audio) == 10);
+    advance_volume_overlay(&app, &playback, 0.02);
+    assert(gc_audio_menu_volume(audio) == 20);
+    advance_volume_overlay(&app, &playback, 0.1);
+    assert(gc_audio_menu_volume(audio) == 30);
+    send_window_event(
+        &app, &playback,
+        (CcEvent){.type = CC_EVENT_POINTER_LEAVE, .cancel_capture = true});
+    assert(playback.volume_keys_held == 0);
+    advance_volume_overlay(&app, &playback, 0.3);
+    assert(scene.volume_indicator_alpha == 1);
+    advance_volume_overlay(&app, &playback, 0.9);
+    assert(fabsf(scene.volume_indicator_alpha - 0.5f) < 0.0001f);
+    assert(playback.volume_overlay_changed);
+    volume_overlay_presented(&playback);
+    assert(!playback.volume_overlay_changed);
+    advance_volume_overlay(&app, &playback, 0.6);
+    assert(scene.volume_indicator_alpha < 0.0001f);
+    advance_volume_overlay(&app, &playback, 1);
+    assert(scene.volume_indicator_alpha == 0);
+    send_window_key(&app, &playback, (CcKey)'=', true);
+    send_window_key(&app, &playback, (CcKey)'=', false);
+    assert(gc_audio_menu_volume(audio) == 40);
+    assert(scene.volume_indicator_alpha == 1);
+    send_window_key(&app, &playback, (CcKey)'=', true);
+    advance_volume_overlay(&app, &playback, 10);
+    assert(gc_audio_menu_volume(audio) == GC_AUDIO_MENU_VOLUME_MAX);
+    advance_volume_overlay(&app, &playback, 5);
+    assert(gc_audio_menu_volume(audio) == GC_AUDIO_MENU_VOLUME_MAX);
+    send_window_key(&app, &playback, (CcKey)'=', false);
+    send_window_key(&app, &playback, (CcKey)'-', true);
+    send_window_key(&app, &playback, (CcKey)'=', true);
+    unsigned before = gc_audio_menu_volume(audio);
+    advance_volume_overlay(&app, &playback, 5);
+    assert(gc_audio_menu_volume(audio) == before); /* Both held cancel repeat. */
+    assert(scene.volume_indicator_alpha == 1);
+    assert(app.counter == 0 && menu.page_elapsed == 0);
+    assert(!playback.start_requested && !playback.history_changed);
+    assert(!runtime.input.held && !runtime.input.pending_pressed);
+    assert(!runtime.boot_input.controllers[0].held);
+    test_window_events = false;
+    free(audio);
+}
+
+static void test_paused_volume_recording(void) {
+    const char *path = "Files/volume-overlay-recording-test.mp4";
+    assert(mkdir("Files", 0700) == 0 || errno == EEXIST);
+    CcPlatform *platform = cc_platform_create("Volume recording", 640, 480);
+    GcScene *scene = calloc(1, sizeof(*scene));
+    assert(platform && scene);
+    scene->platform = platform;
+    scene->font_texture = 1;
+    scene->ui_ticks = 123;
+    scene->animation_fraction = 0.75;
+    gc_menu menu;
+    gc_menu_init(&menu, GC_REGION_USA);
+    menu.page = GC_PAGE_GAME_STARTED;
+    GcFrameRuntime runtime = {0};
+    CcRecordingOptions options = {
+        .platform = platform, .sample_rate = 48000, .video_rate = 60};
+    CcRecording *recording = cc_recording_open_path(&options, path);
+    assert(recording);
+    AppRuntime app = {.menu = &menu,
+                      .scene = scene,
+                      .runtime = &runtime,
+                      .recording = recording,
+                      .inspection = true};
+    AppPlayback playback = {.frames = 37, .volume_overlay_changed = true};
+    test_volume_events = true;
+    volume_poll_ticks = 1;
+    volume_last_alpha = 1;
+    volume_recording_scene = scene;
+    volume_recording_submissions = 0;
+    gc_scene_volume_indicator(scene, 110, 1);
+    assert(present_volume_overlay(&app, &playback));
+    assert(volume_recording_submissions == 1 && !playback.volume_overlay_changed);
+    assert(app.counter == 0 && playback.frames == 37 && !playback.history_changed);
+    assert(menu.page_elapsed == 0 && scene->ui_ticks == 123);
+    assert(scene->animation_fraction == 0.75);
+    volume_recording_failure = true;
+    assert(!present_volume_overlay(&app, &playback));
+    assert(volume_recording_submissions == 2);
+    assert(app.counter == 0 && playback.frames == 37 && !playback.history_changed);
+    volume_recording_failure = false;
+    volume_recording_scene = NULL;
+    test_volume_events = false;
+    assert(cc_recording_close(recording, 0.2));
+    assert(remove(path) == 0);
+    cc_platform_destroy(platform);
+    free(scene);
+}
+
 static uint32_t recording_u32(const uint8_t *bytes) {
     return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 |
            (uint32_t)bytes[2] << 8 | bytes[3];
@@ -420,12 +630,12 @@ static void check_recording_file(const char *path, uint64_t duration_ticks,
         }
         offset = (size_t)(track - movie) + recording_u32(track);
     }
-    assert(seen == 3);
+    assert(seen == (duration_ticks ? 3u : 2u));
     free(bytes);
 }
 
 static void test_actual_recording(const char *ipl_path, const char *region,
-                                  bool fail_clock, bool half_size) {
+                                  bool fail_clock, bool half_size, bool interrupt) {
     char relative_home[96];
     bool directory_created = false;
     for (unsigned attempt = 0; attempt < 1000; ++attempt) {
@@ -453,6 +663,13 @@ static void test_actual_recording(const char *ipl_path, const char *region,
     test_recording_events = true;
     recording_fail_clock_on_quit = fail_clock;
     recording_clock_failed = false;
+    recording_interrupt_on_open = interrupt;
+    retained_signal_calls = 0;
+    void (*previous_signal)(int) = SIG_ERR;
+    if (interrupt) {
+        previous_signal = signal(SIGTERM, retained_test_signal);
+        assert(previous_signal != SIG_ERR);
+    }
     event_phase = drawn_frames = 0;
     drawn_counter = 0;
     char *arguments[] = {"gamecube-menu", "--ipl",        (char *)ipl_path,
@@ -460,9 +677,14 @@ static void test_actual_recording(const char *ipl_path, const char *region,
                          "--delaystart",  "--record",     "half"};
     assert(test_application_main(half_size ? 9 : 8, arguments) ==
            (fail_clock ? EXIT_FAILURE : EXIT_SUCCESS));
-    assert(drawn_counter == 1 && drawn_frames == 3);
+    if (interrupt) {
+        assert(drawn_counter == 0 && drawn_frames == 0 && retained_signal_calls == 0);
+        assert(signal(SIGTERM, previous_signal) == retained_test_signal);
+    } else
+        assert(drawn_counter == 1 && drawn_frames == 3);
     test_recording_events = false;
     recording_clock_failed = false;
+    recording_interrupt_on_open = false;
     char movies[PATH_MAX];
     count = snprintf(movies, sizeof(movies), "%s/Movies", test_home);
     assert(count > 0 && (size_t)count < sizeof(movies));
@@ -480,7 +702,11 @@ static void test_actual_recording(const char *ipl_path, const char *region,
         assert(count > 0 && (size_t)count < sizeof(path));
     }
     assert(closedir(directory) == 0 && path[0]);
-    check_recording_file(path, fail_clock ? 1500000 : 1750000, half_size);
+    check_recording_file(path,
+                         interrupt    ? 0
+                         : fail_clock ? 1500000
+                                      : 1750000,
+                         half_size);
     assert(remove(path) == 0 && rmdir(movies) == 0 && rmdir(test_home) == 0);
     if (saved_home)
         assert(setenv("HOME", saved_home, 1) == 0);
@@ -491,6 +717,8 @@ static void test_actual_recording(const char *ipl_path, const char *region,
 
 int main(int argc, char **argv) {
     test_window_controls();
+    test_music_volume_controls();
+    test_paused_volume_recording();
     if (argc < 3)
         return EXIT_SUCCESS;
     GcConfig config;
@@ -554,9 +782,19 @@ int main(int argc, char **argv) {
     assert(test_application_main(8, restart_arguments) == EXIT_SUCCESS);
     assert(drawn_counter == 1 && drawn_frames == 4);
     test_restart_events = false;
-    test_actual_recording(argv[1], argv[2], false, false);
-    test_actual_recording(argv[1], argv[2], true, false);
-    test_actual_recording(argv[1], argv[2], false, true);
+    test_volume_events = true;
+    event_phase = drawn_frames = volume_poll_ticks = redrawn_frames = 0;
+    drawn_counter = 0;
+    volume_last_alpha = 1;
+    char *volume_arguments[] = {"gamecube-menu", "--ipl",          argv[1], "--region",
+                                argv[2],         "--skip-startup", "--step"};
+    assert(test_application_main(7, volume_arguments) == EXIT_SUCCESS);
+    assert(drawn_counter == 0 && drawn_frames == 1 && redrawn_frames > 5);
+    test_volume_events = false;
+    test_actual_recording(argv[1], argv[2], false, false, false);
+    test_actual_recording(argv[1], argv[2], true, false, false);
+    test_actual_recording(argv[1], argv[2], false, true, false);
+    test_actual_recording(argv[1], argv[2], false, false, true);
     gc_card_image imported = {0};
     assert(gc_card_image_load(&imported, "Files/import.raw") == GC_CARD_IMAGE_OK);
     assert(imported.byte_count == original.byte_count &&

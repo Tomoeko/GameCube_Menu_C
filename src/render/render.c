@@ -397,7 +397,6 @@ static void menu_animation_sync(GcScene *scene, const gc_menu *menu) {
     scene->animation_started = true;
     gc_menu_animation_sample(&scene->startup, &scene->menu_animation, selected_face,
                              menu->face, focused, &scene->menu_pose);
-    scene->perspective = true;
 }
 
 static void glass_cube(GcScene *scene, bool back) {
@@ -1650,7 +1649,8 @@ void gc_scene_frame_counter(GcScene *scene, uint64_t counter) {
 }
 
 static void presentation_overlay(GcScene *scene) {
-    if ((scene->frame_counter_enabled || scene->test_error_alpha) &&
+    if ((scene->frame_counter_enabled || scene->test_error_alpha ||
+         scene->volume_indicator_alpha > 0) &&
         scene->inspection_fade_alpha) {
         CcQuad fade = {.width = 640,
                        .height = 480,
@@ -1708,10 +1708,11 @@ void gc_scene_draw_wait(GcScene *scene) {
         return;
     cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
     presentation_overlay(scene);
+    gc_render_volume_overlay(scene);
     cc_platform_end(scene->platform);
 }
 
-void gc_scene_draw(GcScene *scene, const gc_menu *menu) {
+static void draw_scene(GcScene *scene, const gc_menu *menu, bool advance) {
     if (!scene || !menu || !scene->font_texture)
         return;
     /* PAL changes the global resource language only on confirmation. The
@@ -1727,12 +1728,12 @@ void gc_scene_draw(GcScene *scene, const gc_menu *menu) {
      * fitting either signal to the common 640x480 presentation canvas. */
     scene->pixel_scale_y =
         gc_render_projection_scale_y(menu->region == GC_REGION_EUROPE);
-    scene->perspective = false;
+    scene->perspective = menu->page != GC_PAGE_STARTUP;
     scene->camera_y = -10;
     scene->display_offset_x = (float)menu->settings.screen_position;
     scene->value_alpha = scene->grid_alpha = scene->text_alpha = 1;
     scene->help_drawn = true;
-    if (menu->page != GC_PAGE_STARTUP)
+    if (advance && menu->page != GC_PAGE_STARTUP)
         menu_animation_sync(scene, menu);
     cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
     if (menu->page == GC_PAGE_STARTUP) {
@@ -1746,5 +1747,14 @@ void gc_scene_draw(GcScene *scene, const gc_menu *menu) {
         gc_render_prompts(scene, menu);
     }
     presentation_overlay(scene);
+    gc_render_volume_overlay(scene);
     cc_platform_end(scene->platform);
+}
+
+void gc_scene_draw(GcScene *scene, const gc_menu *menu) {
+    draw_scene(scene, menu, true);
+}
+
+void gc_scene_redraw(GcScene *scene, const gc_menu *menu) {
+    draw_scene(scene, menu, false);
 }

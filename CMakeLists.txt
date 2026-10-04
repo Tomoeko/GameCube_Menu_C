@@ -102,6 +102,7 @@ add_library(gamecube_scene STATIC
     src/render/render_layout.c
     src/render/render_material.c
     src/render/render_mesh.c
+    src/render/render_overlay.c
     src/render/render_resources.c
     src/render/render_state.c)
 target_include_directories(gamecube_scene PUBLIC include PRIVATE src)
@@ -214,9 +215,15 @@ if(BUILD_TESTING)
         target_link_libraries(gc-${name}-test PRIVATE gamecube_core)
         add_test(NAME gc-${name} COMMAND gc-${name}-test)
     endforeach()
+    gc_test_executable(gc-audio-fidelity-test tests/audio/audio_fidelity_test.c)
+    target_link_libraries(gc-audio-fidelity-test PRIVATE gamecube_core)
     foreach(region USA EUR JAP)
         set(GC_PRIVATE_IPL "${PROJECT_SOURCE_DIR}/Files/GameCube_BIOS/${region}/IPL.bin")
         if(EXISTS "${GC_PRIVATE_IPL}")
+            add_test(NAME gc-audio-fidelity-${region}
+                COMMAND gc-audio-fidelity-test "${GC_PRIVATE_IPL}" "${region}")
+            set_tests_properties(gc-audio-fidelity-${region} PROPERTIES
+                SKIP_RETURN_CODE 77)
             foreach(module audio audio_resource text font startup boot_control layout
                 texture_collection menu_animation face_geometry edit_geometry
                 help page_transition card_popup card_usage card_lighting
@@ -229,6 +236,8 @@ if(BUILD_TESTING)
                 COMMAND gc-render_material-test
                     "${CMAKE_BINARY_DIR}/render-material-${region}.ppm"
                     "${GC_PRIVATE_IPL}")
+            add_test(NAME gc-render-overlay-${region}
+                COMMAND gc-render-overlay-test "${GC_PRIVATE_IPL}" "${region}")
             gc_test_directory(gc-card-runtime-${region} card-runtime/${region})
             foreach(module app-tick app-control)
                 add_test(NAME gc-${module}-${region}
@@ -250,6 +259,10 @@ if(BUILD_TESTING)
         "${CMAKE_BINARY_DIR}/render-material-test.ppm")
     gc_test_executable(gc-render-projection-test tests/render/render_projection_test.c)
     add_test(NAME gc-render-projection COMMAND gc-render-projection-test)
+    gc_test_executable(gc-render-overlay-test tests/render/render_overlay_test.c)
+    target_link_libraries(gc-render-overlay-test PRIVATE
+        gamecube_scene gamecube_software)
+    add_test(NAME gc-render-overlay COMMAND gc-render-overlay-test)
     gc_test_executable(gc-scene-test tests/render/scene_test.c)
     target_link_libraries(gc-scene-test PRIVATE gamecube_scene gamecube_software)
     add_test(NAME gc-scene COMMAND gc-scene-test)

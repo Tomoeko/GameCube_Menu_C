@@ -136,6 +136,7 @@ void gc_app_options_usage(FILE *output) {
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
             "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
             "R restarts startup from frame 0 (preserving the --step pause state).\n"
+            "- lowers menu music; = or + raises it (0 to 600 percent).\n"
             "D inserts/ejects local test media (a dummy disc without --disc).\n"
             "E toggles the local fatal-error presentation at any time.\n"
             "--step starts paused: comma back, period forward, Space play/pause.\n");

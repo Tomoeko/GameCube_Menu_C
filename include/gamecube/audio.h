@@ -7,6 +7,8 @@
 
 typedef struct GcAudio GcAudio;
 
+#define GC_AUDIO_MENU_VOLUME_MAX 600u
+
 typedef struct {
     unsigned wave_count;
     unsigned instrument_count;
@@ -47,6 +49,12 @@ unsigned gc_audio_sample_rate(const GcAudio *audio);
 unsigned gc_audio_active_voices(const GcAudio *audio);
 bool gc_audio_sequence_stopped(const GcAudio *audio);
 void gc_audio_set_mono(GcAudio *audio, bool mono);
+/* Host menu-music control, 0 (mute) to GC_AUDIO_MENU_VOLUME_MAX percent;
+ * 100 preserves the original level. Safe while rendering; survives reset.
+ * Volume is applied to a separate music stem after host reconstruction;
+ * other sounds retain their gains, with the final shared PCM limit. */
+bool gc_audio_set_menu_volume(GcAudio *audio, unsigned percent);
+unsigned gc_audio_menu_volume(const GcAudio *audio);
 
 /* Interleaved stereo float samples, overwritten and clamped to [-1, 1]. */
 void gc_audio_render(GcAudio *audio, float *stereo, size_t frames);
