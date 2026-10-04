@@ -5,6 +5,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_compile_options(/experimental:c11atomics /Zc:preprocessor /fp:strict)
+endif()
 
 # Private input, state, captures and build products share one ignored boundary.
 file(REAL_PATH "${CMAKE_BINARY_DIR}" GC_BUILD_PATH)
@@ -122,7 +126,13 @@ target_include_directories(gamecube_software PRIVATE src)
 target_link_libraries(gamecube_software PUBLIC console_common)
 gc_warnings(gamecube_software)
 
-add_library(gamecube_tool_io STATIC tools/support/output.c)
+if(WIN32)
+    add_library(gamecube_tool_io STATIC tools/support/output_windows.c)
+    target_include_directories(gamecube_tool_io PRIVATE Common/src)
+    target_link_libraries(gamecube_tool_io PUBLIC console_common)
+else()
+    add_library(gamecube_tool_io STATIC tools/support/output.c)
+endif()
 target_include_directories(gamecube_tool_io PUBLIC tools)
 gc_warnings(gamecube_tool_io)
 
@@ -176,7 +186,11 @@ if(BUILD_TESTING)
     function(gc_test_executable target)
         add_executable(${target} ${ARGN})
         target_include_directories(${target} PRIVATE src)
-        target_compile_options(${target} PRIVATE -UNDEBUG)
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(${target} PRIVATE -UNDEBUG)
+        endif()
         gc_warnings(${target})
     endfunction()
 
@@ -188,8 +202,12 @@ if(BUILD_TESTING)
 
     gc_test_executable(gc-tool-output-test tests/tools/tool_output_test.c)
     target_link_libraries(gc-tool-output-test PRIVATE gamecube_tool_io)
+    if(WIN32)
+        target_include_directories(gc-tool-output-test PRIVATE Common/tests Common/src)
+    endif()
     add_test(NAME gc-tool-output COMMAND gc-tool-output-test)
     gc_test_directory(gc-tool-output tool-output)
+    add_subdirectory(Common/tests common-tests)
     gc_test_executable(gc-audio_device-test tests/audio/audio_device_test.c
         src/audio/audio_output_device.c)
     target_include_directories(gc-audio_device-test PRIVATE include
@@ -210,6 +228,9 @@ if(BUILD_TESTING)
         resources/ipl_model resources/layout resources/text resources/texture_collection
         startup/boot_control startup/startup
         state/config state/services state/state)
+        if(WIN32 AND source STREQUAL "resources/ipl")
+            continue()
+        endif()
         get_filename_component(name "${source}" NAME)
         gc_test_executable(gc-${name}-test tests/${source}_test.c)
         target_link_libraries(gc-${name}-test PRIVATE gamecube_core)
@@ -239,11 +260,13 @@ if(BUILD_TESTING)
             add_test(NAME gc-render-overlay-${region}
                 COMMAND gc-render-overlay-test "${GC_PRIVATE_IPL}" "${region}")
             gc_test_directory(gc-card-runtime-${region} card-runtime/${region})
-            foreach(module app-tick app-control)
-                add_test(NAME gc-${module}-${region}
-                    COMMAND gc-${module}-test "${GC_PRIVATE_IPL}" "${region}")
-                gc_test_directory(gc-${module}-${region} ${module}/${region})
-            endforeach()
+            if(NOT WIN32)
+                foreach(module app-tick app-control)
+                    add_test(NAME gc-${module}-${region}
+                        COMMAND gc-${module}-test "${GC_PRIVATE_IPL}" "${region}")
+                    gc_test_directory(gc-${module}-${region} ${module}/${region})
+                endforeach()
+            endif()
             file(MAKE_DIRECTORY
                 "${CMAKE_BINARY_DIR}/tests/app-control/${region}/Files")
         endif()
@@ -277,24 +300,28 @@ if(BUILD_TESTING)
     gc_test_executable(gc-frame-history-test tests/app/frame_history_test.c)
     target_link_libraries(gc-frame-history-test PRIVATE gamecube_scene)
     add_test(NAME gc-frame-history COMMAND gc-frame-history-test)
-    gc_test_executable(gc-app-tick-test
-        tests/app/app_tick_test.c src/app/app_options.c)
-    target_link_libraries(gc-app-tick-test PRIVATE
-        gamecube_scene gamecube_recording gamecube_software)
-    gc_test_executable(gc-app-control-test
-        tests/app/app_control_test.c src/app/app_options.c)
-    target_link_libraries(gc-app-control-test PRIVATE
-        gamecube_scene gamecube_recording gamecube_software)
-    add_test(NAME gc-app-window-controls COMMAND gc-app-control-test)
+    if(NOT WIN32)
+        gc_test_executable(gc-app-tick-test
+            tests/app/app_tick_test.c src/app/app_options.c)
+        target_link_libraries(gc-app-tick-test PRIVATE
+            gamecube_scene gamecube_recording gamecube_software)
+        gc_test_executable(gc-app-control-test
+            tests/app/app_control_test.c src/app/app_options.c)
+        target_link_libraries(gc-app-control-test PRIVATE
+            gamecube_scene gamecube_recording gamecube_software)
+        add_test(NAME gc-app-window-controls COMMAND gc-app-control-test)
+    endif()
     gc_test_executable(gc-app-options-test
         tests/app/app_options_test.c src/app/app_options.c)
     target_link_libraries(gc-app-options-test PRIVATE gamecube_core)
     add_test(NAME gc-app-options COMMAND gc-app-options-test)
-    gc_test_executable(gc-recording-test tests/capture/recording_test.c)
-    target_link_libraries(gc-recording-test PRIVATE gamecube_recording gamecube_software)
-    add_test(NAME gc-recording COMMAND gc-recording-test
-        "${CMAKE_BINARY_DIR}/tests/recording")
-    gc_test_directory(gc-recording recording)
+    if(NOT WIN32)
+        gc_test_executable(gc-recording-test tests/capture/recording_test.c)
+        target_link_libraries(gc-recording-test PRIVATE gamecube_recording gamecube_software)
+        add_test(NAME gc-recording COMMAND gc-recording-test
+            "${CMAKE_BINARY_DIR}/tests/recording")
+        gc_test_directory(gc-recording recording)
+    endif()
     if(GC_BUILD_APP)
         add_test(NAME gc-cli-help COMMAND gamecube-menu --help)
         add_test(NAME gc-cli-inspection-flags COMMAND gamecube-menu --delaystart --step --help)

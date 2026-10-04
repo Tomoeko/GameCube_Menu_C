@@ -1,3 +1,4 @@
+#include "console_common/support/host.h"
 #include "gamecube/config.h"
 #include "cards/card_checksum.h"
 #include "console_common/support/endian.h"
@@ -115,7 +116,7 @@ GcConfigResult gc_config_load(GcConfig *config, const char *path, size_t *error_
         *error_line = 0;
     if (!config || !path)
         return GC_CONFIG_INVALID;
-    FILE *file = fopen(path, "r");
+    FILE *file = cc_host_fopen(path, "r");
     if (!file)
         return errno == ENOENT ? GC_CONFIG_MISSING : GC_CONFIG_IO;
     GcConfig pending;
@@ -164,7 +165,7 @@ GcConfigResult gc_config_load(GcConfig *config, const char *path, size_t *error_
 GcConfigResult gc_config_write(const GcConfig *config, const char *path) {
     if (!valid(config) || !path)
         return GC_CONFIG_INVALID;
-    FILE *file = fopen(path, "w");
+    FILE *file = cc_host_fopen(path, "w");
     if (!file)
         return GC_CONFIG_IO;
     int written = fprintf(file,

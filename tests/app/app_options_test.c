@@ -9,7 +9,8 @@ static void test_defaults_and_region_paths(void) {
     assert(gc_app_options_parse(&options, 1, defaults) == GC_APP_OPTIONS_OK);
     assert(options.region == GC_REGION_USA && !options.inspect_frames &&
            !options.record);
-    assert(!options.antialiasing && options.record_audio == CC_CAPTURE_AUDIO_NORMAL);
+    assert(options.antialiasing && !options.antialiasing_override &&
+           options.record_audio == CC_CAPTURE_AUDIO_NORMAL);
     assert(!strcmp(options.ipl_path, "Files/GameCube_BIOS/USA/IPL.bin"));
     assert(!strcmp(options.state_path, "Files/state-usa.dat"));
     const char *regions[] = {"JAP", "USA", "EUR"};
@@ -155,7 +156,10 @@ static void test_recording_audio_and_antialiasing(void) {
     assert(options.record_audio == CC_CAPTURE_AUDIO_WEB);
     char *aa[] = {"gamecube-menu", "--aa"};
     assert(gc_app_options_parse(&options, 2, aa) == GC_APP_OPTIONS_OK);
-    assert(options.antialiasing && !options.record);
+    assert(options.antialiasing && options.antialiasing_override && !options.record);
+    char *disabled[] = {"gamecube-menu", "--no-aa"};
+    assert(gc_app_options_parse(&options, 2, disabled) == GC_APP_OPTIONS_OK);
+    assert(!options.antialiasing && options.antialiasing_override);
     assert(options.record_audio == CC_CAPTURE_AUDIO_NORMAL);
     GcAppOptions original = options;
     char *without_record[] = {"gamecube-menu", "--audio", "web"};

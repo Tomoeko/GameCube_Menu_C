@@ -1,3 +1,4 @@
+#include "console_common/support/host.h"
 #include "gamecube/disc.h"
 #include "console_common/support/endian.h"
 #include "console_common/support/bounds.h"
@@ -353,7 +354,7 @@ GcDiscResult gc_disc_load(const char *path, GcDisc *disc) {
 
     if (!path || !disc)
         return GC_DISC_IMAGE_ARGUMENT;
-    reader.file = fopen(path, "rb");
+    reader.file = cc_host_fopen(path, "rb");
     if (!reader.file)
         return GC_DISC_IMAGE_IO;
     if (fseek(reader.file, 0, SEEK_END) || (length = ftell(reader.file)) < 0) {

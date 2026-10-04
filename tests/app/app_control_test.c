@@ -10,8 +10,9 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
-static int test_clock(clockid_t clock_id, struct timespec *value);
+static bool test_clock(struct timespec *value);
 static bool test_poll(CcPlatform *platform, CcEvent *event);
 static bool test_is_fullscreen(CcPlatform *platform);
 static bool test_set_fullscreen(CcPlatform *platform, bool fullscreen);
@@ -25,7 +26,7 @@ static CcRecording *test_recording_open(CcPlatform *platform, GcAudio *audio,
 /* Mock only the host clock/event boundary. The actual CLI, configuration,
  * native controllers, resource decoder and scene renderer remain active.
  */
-#define clock_gettime test_clock
+#define cc_host_time test_clock
 #define cc_platform_poll test_poll
 #define cc_platform_is_fullscreen test_is_fullscreen
 #define cc_platform_set_fullscreen test_set_fullscreen
@@ -34,7 +35,13 @@ static CcRecording *test_recording_open(CcPlatform *platform, GcAudio *audio,
 #define cc_recording_frame test_recording_frame
 #define gc_recording_open_with_audio test_recording_open
 #define main test_application_main
+static bool test_antialiasing(CcPlatform *platform, bool enabled) {
+    assert(platform && enabled);
+    return true;
+}
+#define cc_platform_set_antialiasing test_antialiasing
 #include "app/main.c"
+#undef cc_platform_set_antialiasing
 #undef main
 #undef gc_scene_draw
 #undef gc_scene_redraw
@@ -43,7 +50,7 @@ static CcRecording *test_recording_open(CcPlatform *platform, GcAudio *audio,
 #undef cc_platform_poll
 #undef cc_platform_is_fullscreen
 #undef cc_platform_set_fullscreen
-#undef clock_gettime
+#undef cc_host_time
 
 static unsigned event_phase;
 static unsigned absent_mask;
@@ -180,23 +187,22 @@ static bool poll_recording_events(CcEvent *event) {
     return true;
 }
 
-static int test_clock(clockid_t clock_id, struct timespec *value) {
-    (void)clock_id;
+static bool test_clock(struct timespec *value) {
     if (clock_failure || recording_clock_failed)
-        return -1;
+        return false;
     if (test_volume_events) {
         *value =
             (struct timespec){.tv_sec = volume_poll_ticks / 10,
                               .tv_nsec = (long)(volume_poll_ticks % 10) * 100000000};
-        return 0;
+        return true;
     }
     if (test_recording_events) {
         *value = (struct timespec){.tv_sec = event_phase / 8,
                                    .tv_nsec = (long)(event_phase % 8) * 125000000};
-        return 0;
+        return true;
     }
     *value = (struct timespec){.tv_sec = event_phase >= 3 ? 1 : 0};
-    return 0;
+    return true;
 }
 
 static bool test_poll(CcPlatform *platform, CcEvent *event) {
@@ -324,6 +330,10 @@ static void test_window_controls(void) {
     gc_frame_control_init(&playback.frame_control, true);
     test_window_events = window_fullscreen = true;
     window_requests = 0;
+    send_window_event(&app, &playback, (CcEvent){.type = CC_EVENT_WINDOW_RESIZED});
+    assert(playback.surface_changed && playback.frame_control.paused &&
+           !playback.history_changed && !runtime.input.pending_pressed);
+    playback.surface_changed = false;
 
     /* Cancel returns home, but autorepeat from that same press stays Cancel. */
     send_window_key(&app, &playback, CC_KEY_ESCAPE, true);
@@ -528,20 +538,22 @@ static void test_paused_volume_recording(void) {
                       .runtime = &runtime,
                       .recording = recording,
                       .inspection = true};
-    AppPlayback playback = {.frames = 37, .volume_overlay_changed = true};
+    AppPlayback playback = {
+        .frames = 37, .volume_overlay_changed = true, .surface_changed = true};
     test_volume_events = true;
     volume_poll_ticks = 1;
     volume_last_alpha = 1;
     volume_recording_scene = scene;
     volume_recording_submissions = 0;
     gc_scene_volume_indicator(scene, 200, 1);
-    assert(present_volume_overlay(&app, &playback));
-    assert(volume_recording_submissions == 1 && !playback.volume_overlay_changed);
+    assert(present_host_redraw(&app, &playback));
+    assert(volume_recording_submissions == 1 && !playback.volume_overlay_changed &&
+           !playback.surface_changed);
     assert(app.counter == 0 && playback.frames == 37 && !playback.history_changed);
     assert(menu.page_elapsed == 0 && scene->ui_ticks == 123);
     assert(scene->animation_fraction == 0.75);
     volume_recording_failure = true;
-    assert(!present_volume_overlay(&app, &playback));
+    assert(!present_host_redraw(&app, &playback));
     assert(volume_recording_submissions == 2);
     assert(app.counter == 0 && playback.frames == 37 && !playback.history_changed);
     volume_recording_failure = false;

@@ -12,6 +12,27 @@ Files/build/gamecube-menu
 Metal is the macOS default. For GLES2, configure with `-DGC_BACKEND=gles2`;
 EGL, GLES2 and X11 system development libraries are required on Linux.
 
+On Windows, install Visual Studio 2026 with **Desktop development with C++**
+and **C++ CMake tools for Windows**. Open its **x64 Native Tools Command Prompt**
+in this repository. Run:
+
+```bat
+git submodule update --init --recursive
+cmake -S . -B Files/build-windows -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=OFF
+cmake --build Files/build-windows --config Release --parallel
+Files\build-windows\Release\gamecube-menu.exe
+```
+
+Windows uses OpenGL 2.1 through the shared GLES2 renderer. Install your GPU driver.
+Graphics and audio use Windows system APIs. No extra runtime libraries are needed.
+
+The IPL, audio, and image tools also build on Windows:
+
+```bat
+Files\build-windows\Release\gc-ipl-tool.exe inspect Files/GameCube_BIOS/USA/IPL.bin
+Files\build-windows\Release\gc-ipl-tool.exe prepare Files/GameCube_BIOS/USA/IPL.bin Files/Recovery/USA
+```
+
 ```sh
 Files/build/gamecube-menu --ipl Files/input/IPL.bin --region USA
 Files/build/gamecube-menu --region EUR
@@ -46,8 +67,17 @@ D inserts/ejects test media; E toggles the test error; Z selects the alternate
 startup sound. With `--step`, comma rewinds, period advances, and Space plays/pauses.
 Bare `--delaystart` waits for A, B, or an arrow key.
 
-`--aa` smooths edges. It uses extra GPU resources.
-Recordings go to Movies and stop on exit. `half` halves both video dimensions.
+Antialiasing defaults on. `Files/display.json` is created automatically:
+
+```json
+{
+    "antialiasing": true
+}
+```
+
+Set it to `false` to reduce GPU use. `--aa` and `--no-aa` override this setting.
+Recordings go to Movies (Videos on Windows) and stop on exit.
+`half` halves both video dimensions.
 Audio stays unchanged by default. `--audio web` uses AAC on macOS for web previews.
 
 `Files/config.ini` is created automatically. Two empty cards are the default.

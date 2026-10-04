@@ -1,3 +1,4 @@
+#include "console_common/support/host.h"
 #include "gamecube/card_image.h"
 #include "card_checksum.h"
 #include "console_common/support/endian.h"
@@ -378,7 +379,7 @@ static gc_card_image_result load_image(gc_card_image *image, const char *path,
 
     if (!image || !path || fallback_encoding > 1)
         return GC_CARD_IMAGE_ARGUMENT;
-    file = fopen(path, "rb");
+    file = cc_host_fopen(path, "rb");
     if (!file)
         return GC_CARD_IMAGE_IO;
     if (fseek(file, 0, SEEK_END) != 0)

@@ -61,7 +61,8 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
         return GC_APP_OPTIONS_INVALID;
     GcAppOptions candidate = {.region = GC_REGION_USA,
                               .config_path = "Files/config.ini",
-                              .boot_phase = GC_BOOT_NORMAL};
+                              .boot_phase = GC_BOOT_NORMAL,
+                              .antialiasing = true};
     bool explicit_ipl = false;
     bool explicit_audio = false;
     for (int index = 1; index < argc; ++index) {
@@ -72,8 +73,9 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
             return GC_APP_OPTIONS_HELP;
         if (!strcmp(flag, "--step")) {
             candidate.inspect_frames = true;
-        } else if (!strcmp(flag, "--aa")) {
-            candidate.antialiasing = true;
+        } else if (!strcmp(flag, "--aa") || !strcmp(flag, "--no-aa")) {
+            candidate.antialiasing = !strcmp(flag, "--aa");
+            candidate.antialiasing_override = true;
         } else if (!strcmp(flag, "--record")) {
             candidate.record = true;
             candidate.record_half =
@@ -132,7 +134,7 @@ void gc_app_options_usage(FILE *output) {
             "       [--audio web] (AAC recording audio for web playback)\n"
             "       Audio stays unchanged without --audio.\n"
             "       half records half width and height.\n"
-            "       [--aa] (smooth edges; uses extra GPU resources)\n"
+            "       [--aa | --no-aa] (override Files/display.json; default on)\n"
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
             "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
             "R restarts startup from frame 0 (preserving the --step pause state).\n"

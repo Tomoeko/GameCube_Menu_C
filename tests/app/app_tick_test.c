@@ -1,8 +1,18 @@
 /* Exercise the application's video orchestration with the first-party
  * software backend, including actual IPL assets and sequencer state.
  */
+#define _POSIX_C_SOURCE 200809L
+#include "console_common/platform/platform.h"
+#include <assert.h>
+
 #define main gc_application_main
+static bool test_antialiasing(CcPlatform *platform, bool enabled) {
+    assert(platform && enabled);
+    return true;
+}
+#define cc_platform_set_antialiasing test_antialiasing
 #include "app/main.c"
+#undef cc_platform_set_antialiasing
 #undef main
 #include "render/software/software.h"
 #include "audio/audio_internal.h"

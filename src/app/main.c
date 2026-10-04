@@ -21,10 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#endif
+#include "console_common/support/host.h"
+#include "console_common/support/display_settings.h"
 
 static volatile sig_atomic_t application_exit_requested;
 
@@ -34,59 +32,27 @@ static void request_application_exit(int signal_number) {
 }
 
 static bool files_directory(void) {
-    if (access("Files", F_OK) == 0)
-        return true;
-#ifdef __APPLE__
-    char executable[PATH_MAX], resolved[PATH_MAX];
-    uint32_t size = sizeof(executable);
-    if (_NSGetExecutablePath(executable, &size) || !realpath(executable, resolved))
-        return false;
-    char *separator;
-    while ((separator = strrchr(resolved, '/'))) {
-        *separator = '\0';
-        char candidate[PATH_MAX];
-        int length =
-            snprintf(candidate, sizeof(candidate), "%s/Files/GameCube_BIOS", resolved);
-        if (length > 0 && (size_t)length < sizeof(candidate) &&
-            access(candidate, F_OK) == 0)
-            return chdir(resolved) == 0;
-    }
-#endif
-    return false;
+    return cc_host_enter_project("Files");
 }
 
 static bool seconds_now(double *seconds) {
     struct timespec value;
-    if (!seconds || clock_gettime(CLOCK_MONOTONIC, &value) != 0)
+    if (!seconds || !cc_host_time(&value))
         return false;
     *seconds = (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
     return isfinite(*seconds);
 }
 
 static bool private_config_path(const char *path) {
-    char files[PATH_MAX], directory[PATH_MAX], resolved[PATH_MAX];
-    if (!path || strlen(path) >= sizeof(directory) || !realpath("Files", files))
-        return false;
-    if (!realpath(path, resolved)) {
-        memcpy(directory, path, strlen(path) + 1);
-        char *separator = strrchr(directory, '/');
-        if (!separator || !separator[1])
-            return false;
-        *separator = '\0';
-        if (!realpath(*directory ? directory : "/", resolved))
-            return false;
-    }
-    size_t length = strlen(files);
-    return !strncmp(resolved, files, length) &&
-           (resolved[length] == '/' || resolved[length] == '\0');
+    return cc_host_path_inside("Files", path);
 }
 
 static uint32_t time_base_low(void) {
     struct timespec value;
-    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
+    if (!cc_host_time(&value))
         return 0;
-    /* Host timer samples feed the recovered random streams. They do not
-     * pretend to reproduce a particular console's time-base seed. */
+    /* Host timer samples seed recovered random streams independently of
+     * console time-base values. */
     return (uint32_t)((uint64_t)value.tv_sec * UINT64_C(1000000000) +
                       (uint64_t)value.tv_nsec);
 }
@@ -167,7 +133,7 @@ static void boot_key(GcBootInput *input, const CcEvent *event) {
 static void set_current_clock(gc_menu *menu) {
     time_t now = time(NULL);
     struct tm value;
-    if (!localtime_r(&now, &value))
+    if (!cc_host_localtime(&now, &value))
         return;
     gc_date_time clock = {value.tm_year + 1900, value.tm_mon + 1, value.tm_mday,
                           value.tm_hour,        value.tm_min,     value.tm_sec};
@@ -626,6 +592,7 @@ typedef struct {
     bool fullscreen_key_held;
     bool restart_key_held;
     bool restart_requested;
+    bool surface_changed;
     unsigned volume_keys_held;
     double volume_repeat_elapsed;
     double volume_indicator_remaining;
@@ -691,8 +658,9 @@ static void volume_overlay_presented(AppPlayback *playback) {
     playback->volume_refresh_elapsed = 0;
 }
 
-static bool present_volume_overlay(AppRuntime *app, AppPlayback *playback) {
+static bool present_host_redraw(AppRuntime *app, AppPlayback *playback) {
     draw_video_frame_mode(app, false);
+    playback->surface_changed = false;
     volume_overlay_presented(playback);
     return record_video_frame(app);
 }
@@ -765,6 +733,10 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
     while (cc_platform_poll(app->scene->platform, &event)) {
         if (event.type == CC_EVENT_QUIT) {
             playback->running = false;
+            continue;
+        }
+        if (event.type == CC_EVENT_WINDOW_RESIZED) {
+            playback->surface_changed = true;
             continue;
         }
         bool key_event =
@@ -977,6 +949,7 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                 ++app->counter;
             }
             draw_video_frame(app);
+            playback.surface_changed = false;
             volume_overlay_presented(&playback);
             if (!record_video_frame(app) || (!restored && !save_video_frame(app))) {
                 playback.running = false;
@@ -1001,15 +974,15 @@ static int run_application(AppRuntime *app, const GcAppOptions *options) {
                     }
                 }
             }
-        } else if (playback.volume_overlay_changed &&
-                   playback.volume_refresh_elapsed >= 1.0 / 60) {
-            if (!present_volume_overlay(app, &playback)) {
+        } else if (playback.surface_changed ||
+                   (playback.volume_overlay_changed &&
+                    playback.volume_refresh_elapsed >= 1.0 / 60)) {
+            if (!present_host_redraw(app, &playback)) {
                 result = EXIT_FAILURE;
                 break;
             }
         }
-        struct timespec delay = {.tv_nsec = 1000000};
-        nanosleep(&delay, NULL);
+        cc_host_sleep(1);
     }
     return result;
 }
@@ -1025,6 +998,13 @@ int main(int argc, char **argv) {
         gc_app_options_usage(stderr);
         return parsed_options == GC_APP_OPTIONS_HELP ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    CcDisplaySettings display = {.antialiasing = true};
+    if (!cc_display_settings_load_project(&display)) {
+        fprintf(stderr, "Could not read or create Files/display.json.\n");
+        return EXIT_FAILURE;
+    }
+    if (!options.antialiasing_override)
+        options.antialiasing = display.antialiasing;
     if (options.record && !cc_capture_audio_mode_supported(options.record_audio)) {
         fprintf(stderr, "Web recording audio is unavailable on this platform.\n");
         return EXIT_FAILURE;

@@ -1,3 +1,4 @@
+#include "console_common/support/host.h"
 #include "gamecube/state.h"
 #include "console_common/support/endian.h"
 #include "console_common/support/atomic_file.h"
@@ -89,7 +90,7 @@ gc_state_result gc_state_load(gc_menu *menu, const char *path,
 
     if (!menu || !path || now_unix_seconds < 0)
         return GC_STATE_ARGUMENT;
-    file = fopen(path, "rb");
+    file = cc_host_fopen(path, "rb");
     if (!file)
         return errno == ENOENT ? GC_STATE_MISSING : GC_STATE_IO;
     length = fread(bytes, 1, sizeof(bytes), file);
