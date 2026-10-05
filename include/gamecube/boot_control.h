@@ -100,6 +100,7 @@ typedef struct {
     bool fatal_error;
     bool has_frame;
     bool language_pending;
+    bool menu_requested; /* Local keyboard request, retained after key release. */
 } GcBootControl;
 
 typedef struct {
@@ -137,6 +138,12 @@ bool gc_boot_control_init(const GcBootConfig *config, GcBootControl *control,
                           GcBootPhase initial_phase);
 GcBootPhase gc_boot_initial_phase(uint8_t initial_drive_state,
                                   bool configuration_required, bool force_menu);
+
+/* A local confirm tap drives the recovered acceleration and menu transition.
+ * Mandatory startup dialogs and an already-started disc handoff keep ownership.
+ * Controller held levels retain their separate native behavior.
+ */
+void gc_boot_control_request_menu(GcBootControl *control);
 
 /* One native video update, with held buttons sampled before the update.
  * The changing-state tick retains the old draw phase, matching the dispatcher.

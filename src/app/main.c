@@ -340,6 +340,8 @@ static bool startup_tick(AppRuntime *app) {
     runtime->boot_input.drive_state = boot_drive(app->menu->disc_status);
     GcInputFrame sampled;
     gc_input_control_sample(&runtime->input, &sampled);
+    if (sampled.pressed & GC_INPUT_A)
+        gc_boot_control_request_menu(app->boot);
     GcBootInput input = runtime->boot_input;
     input.controllers[0].held |= sampled.pressed;
     GcBootEvents events;
@@ -779,6 +781,8 @@ static void poll_host_events(AppRuntime *app, const GcAppOptions *options,
                 continue;
             }
         }
+        if (down && event.key_repeat)
+            continue;
         if (app->runtime->startup_waiting && !options->timed_start && down) {
             gc_button button;
             if (key_button(event.key, &button) && button != GC_BUTTON_START)

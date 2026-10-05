@@ -162,6 +162,63 @@ static void inspect_menu_ticks(AppRuntime *app) {
     assert(app->scene->menu_animation.oscillator_phase == (uint16_t)(phase + 7));
 }
 
+static void inspect_startup_interrupt(AppRuntime *app) {
+    GcAppOptions options = {.inspect_frames = true};
+    AppPlayback playback = {.running = true};
+    gc_frame_control_init(&playback.frame_control, true);
+    gc_menu_set_disc(app->menu, GC_DISC_READY, "Local disc", "Startup test");
+    assert(gc_disc_control_init(&app->runtime->disc, GC_DISC_READY));
+    assert(restart_startup(app, &options, &playback));
+    for (unsigned index = 0; index < 30; ++index) {
+        assert(advance_video_tick(app));
+        ++app->counter;
+    }
+    assert(app->menu->page == GC_PAGE_STARTUP && !app->boot->drawing_complete);
+    CcEvent down = {.type = CC_EVENT_KEY_DOWN, .key = (CcKey)'a'};
+    CcEvent up = {.type = CC_EVENT_KEY_UP, .key = (CcKey)'a'};
+    boot_key(&app->runtime->boot_input, &down);
+    assert(gc_input_control_button(&app->runtime->input, GC_BUTTON_CONFIRM, true));
+    boot_key(&app->runtime->boot_input, &up);
+    assert(gc_input_control_button(&app->runtime->input, GC_BUTTON_CONFIRM, false));
+    assert(!app->runtime->boot_input.controllers[0].held && !app->runtime->input.held &&
+           app->runtime->input.pending_pressed == GC_INPUT_A);
+    draw_video_frame(app);
+    assert(save_video_frame(app));
+    tick(app);
+    assert(app->boot->menu_requested && app->boot->spin_ticks == 1 &&
+           app->menu->page == GC_PAGE_STARTUP);
+    uint64_t first_frame = gc_software_frame_hash(app->scene->platform);
+    assert(gc_frame_history_seek(app->history, -1, &app->counter, app->menu, app->boot,
+                                 app->scene, app->runtime));
+    assert(!app->boot->menu_requested &&
+           app->runtime->input.pending_pressed == GC_INPUT_A);
+    tick(app);
+    assert(app->boot->menu_requested && app->boot->spin_ticks == 1 &&
+           gc_software_frame_hash(app->scene->platform) == first_frame);
+    for (unsigned index = 1; index < 82; ++index) {
+        float velocity = app->boot->velocity;
+        assert(advance_video_tick(app));
+        ++app->counter;
+        assert(app->boot->velocity > velocity && !app->runtime->launching &&
+               !app->menu->launch_requested && app->menu->page == GC_PAGE_STARTUP);
+    }
+    assert(app->boot->next_phase == GC_BOOT_TRANSITION);
+    tick(app);
+    assert(app->boot->phase == GC_BOOT_TRANSITION && app->boot->transition_tick == 1);
+    for (unsigned index = 1; index < 145; ++index) {
+        assert(advance_video_tick(app));
+        ++app->counter;
+        assert(app->menu->page == GC_PAGE_STARTUP && !app->runtime->launching);
+    }
+    tick(app);
+    assert(app->boot->phase == GC_BOOT_MENU && app->menu->page == GC_PAGE_CUBE);
+    assert(!app->menu->launch_requested && !app->runtime->launching);
+    assert(restart_startup(app, &options, &playback));
+    assert(!app->boot->menu_requested && app->boot->velocity == 0);
+    gc_menu_set_disc(app->menu, GC_DISC_ABSENT, NULL, NULL);
+    assert(gc_disc_control_init(&app->runtime->disc, GC_DISC_ABSENT));
+}
+
 static void inspect_sound_commit(AppRuntime *app) {
     gc_menu *menu = app->menu;
     menu->page = GC_PAGE_OPTIONS;
@@ -637,6 +694,7 @@ int main(int argc, char **argv) {
                       .inspection = true};
     inspect_exact_waits(&app);
     inspect_wait_and_boot(&app);
+    inspect_startup_interrupt(&app);
     inspect_menu_ticks(&app);
     inspect_calendar_diagonals(&app);
     inspect_sound_commit(&app);

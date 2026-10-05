@@ -319,6 +319,108 @@ static void test_held_a_and_release(const GcBootConfig *config) {
     assert(control.phase == GC_BOOT_NORMAL && control.spin_ticks == 20);
 }
 
+static void test_menu_request(const GcBootConfig *config) {
+    for (unsigned phase = GC_STARTUP_DROP; phase <= GC_STARTUP_COMPLETE; ++phase) {
+        GcBootControl control;
+        GcBootEvents events;
+        GcBootInput input = input_for(GC_BOOT_DRIVE_PENDING, 0);
+        GcStartupPose pose;
+        assert(gc_boot_control_init(config, &control, GC_BOOT_NORMAL));
+        for (unsigned tick = 0; tick <= config->startup->sequence_ticks; ++tick) {
+            step(config, &control, &input, &events);
+            assert(gc_boot_control_sample_pose(config, &control, &pose));
+            bool reached = phase == GC_STARTUP_COMPLETE
+                               ? control.drawing_complete
+                               : pose.phase == (GcStartupPhase)phase;
+            if (reached && control.drawing_tick)
+                break;
+        }
+        /* The controller stops drawing at its ready flag, before the sampler's
+         * synthetic COMPLETE phase. Exercise that late input window as well. */
+        if (phase == GC_STARTUP_COMPLETE)
+            assert(control.drawing_complete);
+        else
+            assert(pose.phase == (GcStartupPhase)phase);
+        unsigned drawing_tick = control.drawing_tick;
+        int16_t angle = control.angle;
+        gc_boot_control_request_menu(&control);
+        assert(control.menu_requested && control.velocity == 0 &&
+               control.angle == angle && control.drawing_tick == drawing_tick);
+        input.drive_state = phase & 1 ? GC_BOOT_DRIVE_READY : GC_BOOT_DRIVE_ABSENT;
+        for (unsigned tick = 1; tick <= 82; ++tick) {
+            float velocity = control.velocity;
+            step(config, &control, &input, &events);
+            assert(control.spin_ticks == tick && control.velocity > velocity);
+            assert(!events.menu_begin && !events.disc_handoff &&
+                   !events.drawing_fast_forwarded && !control.fader);
+            assert(control.kinetic ==
+                   (unsigned)config->startup->kinetic_increment * tick);
+        }
+        assert(control.next_phase == GC_BOOT_TRANSITION);
+        unsigned frozen = control.drawing_tick;
+        for (unsigned tick = 1; tick <= 145; ++tick) {
+            step(config, &control, &input, &events);
+            assert(control.phase == GC_BOOT_TRANSITION &&
+                   control.transition_tick == tick);
+            assert(control.drawing_tick == frozen && !events.menu_begin &&
+                   !events.disc_handoff);
+            assert(gc_boot_control_sample_pose(config, &control, &pose));
+            assert(!pose.moving_cube_alpha && !pose.trail_count && pose.perspective);
+            if (tick == 1)
+                assert(pose.glass_cube_alpha == 17 && !pose.menu_labels_alpha);
+        }
+        assert(pose.glass_cube_alpha == 255 && pose.menu_labels_alpha == 255);
+        step(config, &control, &input, &events);
+        assert(events.menu_begin && !events.disc_handoff &&
+               control.phase == GC_BOOT_MENU);
+        step(config, &control, &input, &events);
+        assert(!events.menu_begin);
+        assert(gc_boot_control_init(config, &control, GC_BOOT_NORMAL));
+        assert(!control.menu_requested);
+    }
+
+    const GcBootPhase dialogs[] = {GC_BOOT_SETTINGS_NOTICE, GC_BOOT_RESET_PROMPT,
+                                   GC_BOOT_LID_DELAY};
+    GcBootControl control;
+    for (unsigned index = 0; index < sizeof(dialogs) / sizeof(dialogs[0]); ++index) {
+        assert(gc_boot_control_init(config, &control, dialogs[index]));
+        gc_boot_control_request_menu(&control);
+        assert(!control.menu_requested);
+    }
+    assert(gc_boot_control_init(config, &control, GC_BOOT_NORMAL));
+    control.next_phase = GC_BOOT_DISC_HANDOFF;
+    gc_boot_control_request_menu(&control);
+    assert(!control.menu_requested);
+    control.next_phase = GC_BOOT_NORMAL;
+    control.fatal_error = true;
+    gc_boot_control_request_menu(&control);
+    assert(!control.menu_requested);
+    gc_boot_control_request_menu(NULL);
+
+    assert(gc_boot_control_init(config, &control, GC_BOOT_NORMAL));
+    GcBootInput input = input_for(GC_BOOT_DRIVE_READY, 0);
+    GcBootEvents events;
+    while (!control.drawing_complete)
+        step(config, &control, &input, &events);
+    assert(control.fader > 0 && !events.disc_handoff);
+    gc_boot_control_request_menu(&control);
+    for (unsigned tick = 0; tick < 82 + 145 + 1; ++tick) {
+        step(config, &control, &input, &events);
+        assert(!events.disc_handoff);
+    }
+    assert(events.menu_begin && control.phase == GC_BOOT_MENU && !control.fader);
+
+    assert(gc_boot_control_init(config, &control, GC_BOOT_NORMAL));
+    gc_boot_control_request_menu(&control);
+    step(config, &control, &input, &events);
+    input.drive_state = GC_BOOT_DRIVE_FATAL;
+    for (unsigned tick = 0; tick < 82 + 145 + 1; ++tick) {
+        step(config, &control, &input, &events);
+        assert(!events.disc_handoff && !events.menu_begin);
+    }
+    assert(control.fatal_error && !control.menu_requested && control.error_ticks == 30);
+}
+
 static void test_lid_delay(const GcBootConfig *config) {
     GcBootControl control;
     GcBootEvents events;
@@ -498,6 +600,7 @@ static void test_all(const GcStartup *startup) {
     test_disc_ready(&config);
     test_drive_waits_and_latches(&config);
     test_held_a_and_release(&config);
+    test_menu_request(&config);
     test_lid_delay(&config);
     test_configuration_notice(&config);
     test_reset_prompt(&config);

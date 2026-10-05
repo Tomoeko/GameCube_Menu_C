@@ -516,6 +516,40 @@ static void test_music_volume_controls(void) {
     free(audio);
 }
 
+static void test_startup_confirm_events(void) {
+    gc_menu menu;
+    gc_menu_init(&menu, GC_REGION_USA);
+    GcScene scene = {0};
+    GcFrameRuntime runtime = {.startup_waiting = true};
+    AppRuntime app = {.menu = &menu, .scene = &scene, .runtime = &runtime};
+    AppPlayback playback = {.running = true};
+    test_window_events = true;
+    send_window_key(&app, &playback, (CcKey)'a', true);
+    assert(playback.start_requested && !runtime.input.pending_pressed &&
+           !runtime.boot_input.controllers[0].held);
+    runtime.startup_waiting = false;
+    playback.start_requested = false;
+    send_window_event(
+        &app, &playback,
+        (CcEvent){.type = CC_EVENT_KEY_DOWN, .key = (CcKey)'a', .key_repeat = true});
+    assert(!runtime.input.pending_pressed && !runtime.boot_input.controllers[0].held);
+    send_window_key(&app, &playback, (CcKey)'a', false);
+    send_window_key(&app, &playback, (CcKey)'a', true);
+    send_window_key(&app, &playback, (CcKey)'a', false);
+    GcInputFrame frame;
+    assert(gc_input_control_sample(&runtime.input, &frame));
+    assert(frame.pressed == GC_INPUT_A && !frame.held &&
+           !runtime.boot_input.controllers[0].held);
+    assert(!playback.start_requested);
+    send_window_key(&app, &playback, CC_KEY_ENTER, true);
+    send_window_key(&app, &playback, (CcKey)'b', true);
+    send_window_key(&app, &playback, CC_KEY_ENTER, false);
+    send_window_key(&app, &playback, (CcKey)'b', false);
+    assert(gc_input_control_sample(&runtime.input, &frame));
+    assert(frame.pressed == GC_INPUT_B); /* Cancel keeps native input priority. */
+    test_window_events = false;
+}
+
 static void test_paused_volume_recording(void) {
     const char *path = "Files/volume-overlay-recording-test.mp4";
     assert(mkdir("Files", 0700) == 0 || errno == EEXIST);
@@ -740,6 +774,7 @@ static void test_actual_recording(const char *ipl_path, const char *region,
 
 int main(int argc, char **argv) {
     test_window_controls();
+    test_startup_confirm_events();
     test_music_volume_controls();
     test_paused_volume_recording();
     if (argc < 3)

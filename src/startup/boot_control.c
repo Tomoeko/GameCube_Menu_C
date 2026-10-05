@@ -63,6 +63,11 @@ bool gc_boot_control_init(const GcBootConfig *config, GcBootControl *control,
     return true;
 }
 
+void gc_boot_control_request_menu(GcBootControl *control) {
+    if (control && control->next_phase == GC_BOOT_NORMAL && !control->fatal_error)
+        control->menu_requested = true;
+}
+
 static uint16_t held_buttons(const GcBootInput *input) {
     uint16_t buttons = 0;
     for (unsigned index = 0; index < GC_BOOT_CONTROLLER_COUNT; ++index) {
@@ -239,10 +244,15 @@ static void fade_out(GcBootControl *control) {
 
 static bool update_normal(const GcBootConfig *config, GcBootControl *control,
                           const GcBootInput *input, GcBootEvents *events) {
+    if (control->menu_requested && input->drive_state == GC_BOOT_DRIVE_FATAL) {
+        control->menu_requested = false;
+        control->fatal_error = true;
+    }
     bool was_complete = control->drawing_complete;
-    if (!was_complete)
+    if (!was_complete || control->menu_requested)
         update_spin(config, control,
-                    (held_buttons(input) & GC_BOOT_PAD_A) && control->drawing_active,
+                    control->menu_requested || ((held_buttons(input) & GC_BOOT_PAD_A) &&
+                                                control->drawing_active),
                     events);
     advance_kinetic(config->startup, control);
     poll_startup_sound(config, control, input, events);
@@ -261,6 +271,10 @@ static bool update_normal(const GcBootConfig *config, GcBootControl *control,
             ++control->unrecognized_ticks;
     } else if (control->unrecognized_ticks) {
         --control->unrecognized_ticks;
+    }
+    if (control->menu_requested) {
+        fade_out(control);
+        return true;
     }
     if (!control->absence_latched) {
         if (input->drive_state == GC_BOOT_DRIVE_READY && control->drawing_complete)
