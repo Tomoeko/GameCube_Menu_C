@@ -123,8 +123,9 @@ bool gc_startup_load(const char *ipl_path, GcStartup *startup);
 void gc_startup_destroy(GcStartup *startup);
 
 /* Samples the native integer tick state. Frame zero is the first video update.
- * Matrices are row-major 3x4 affines: apply cube_matrix, then scene_matrix,
- * then add moving_cube_world_y to the moving cube's world Y coordinate.
+ * Matrices are row-major 3x4 affines: apply cube_matrix, then model_scale,
+ * then scene_matrix, then add moving_cube_world_y to the moving cube's world Y.
+ * Trails and the large startup models share model_scale and scene_matrix.
  */
 bool gc_startup_sample(const GcStartup *startup, unsigned tick, GcStartupPose *pose);
 

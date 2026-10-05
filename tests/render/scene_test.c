@@ -1,5 +1,6 @@
 #include "gamecube/render.h"
 #include "gamecube/frame_history.h"
+#include "render/render_internal.h"
 #include "render/software/software.h"
 
 #include <assert.h>
@@ -45,9 +46,11 @@ static void native_startup_trails(const GcScene *scene, const GcStartupPose *pos
                          (float)scene->startup.trail_color[2] / 255,
                          (float)trail->alpha / 255};
         for (unsigned corner = 0; corner < 4; ++corner) {
-            float point[3];
-            gc_startup_transform(pose->scene_matrix, trail->positions[corners[corner]],
-                                 point);
+            float scaled[3], point[3];
+            for (unsigned axis = 0; axis < 3; ++axis)
+                scaled[axis] =
+                    trail->positions[corners[corner]][axis] * pose->model_scale[axis];
+            gc_startup_transform(pose->scene_matrix, scaled, point);
             material.vertices[corner] = (CcMaterialVertex){
                 .x = 24 + ((2 * point[0] + 4) / 588 + 1) * 592.5f / 2,
                 .y = (scene->startup.frame_rate == 50 ? 240 + 0.25f * (480.0f / 576)
@@ -61,11 +64,42 @@ static void native_startup_trails(const GcScene *scene, const GcStartupPose *pos
     }
 }
 
+static void startup_cube_vertices(const GcScene *scene, const GcStartupPose *pose) {
+    const GcMesh *mesh = scene->moving_cube;
+    const unsigned submitted[3] = {0, 1, 3};
+    /* Native USA/JAP f74c/f4cc and EUR 10060/fde0 place the local cube
+     * through the scaled formation, then add its world-space drop/rise. */
+    for (size_t index = 0; index < mesh->model.triangle_count; ++index) {
+        const GcIplTriangle *triangle = &mesh->model.triangles[index];
+        for (unsigned vertex = 0; vertex < 3; ++vertex) {
+            GcIplVertex local;
+            assert(gc_ipl_model_transform_vertex_native(
+                &mesh->model, triangle->joint_index, &triangle->vertices[vertex],
+                &local));
+            float placed[3], point[3];
+            gc_startup_transform(pose->cube_matrix, local.position, placed);
+            for (unsigned axis = 0; axis < 3; ++axis)
+                placed[axis] *= pose->model_scale[axis];
+            gc_startup_transform(pose->scene_matrix, placed, point);
+            point[1] += pose->moving_cube_world_y;
+            float x = 24 + ((2 * point[0] + 4) / 588 + 1) * 592.5f / 2;
+            float y = gc_render_projection_center_y(scene->startup.frame_rate == 50) -
+                      (point[1] + 55) * scene->pixel_scale_y;
+            const CcMaterialVertex *actual =
+                &mesh->faces[index].vertices[submitted[vertex]];
+            assert(fabsf(actual->x - x) < 0.001f);
+            assert(fabsf(actual->y - y) < 0.001f);
+        }
+    }
+}
+
 static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
     /* Borrow resources without destroying the copy or changing shared meshes. */
     GcScene isolated = *scene;
     isolated.menu_cube = isolated.boot_mark = isolated.boot_base = NULL;
     isolated.boot_cover = isolated.moving_cube = isolated.logotype = NULL;
+    GcMesh empty_cover = {0};
+    isolated.boot_cover = &empty_cover;
     isolated.boot_config = NULL;
     isolated.boot_control = NULL;
     isolated.frame_counter_enabled = false;
@@ -79,6 +113,22 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
         scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
             4 * scene->startup.roll_ticks,
     };
+    const unsigned interruptions[] = {
+        2,
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] + 2,
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
+            7 * scene->startup.roll_ticks,
+        scene->startup.phase_start_ticks[GC_STARTUP_ROLL] +
+            20 * scene->startup.roll_ticks,
+        scene->startup.phase_start_ticks[GC_STARTUP_BOUNCE] + 2,
+        scene->startup.phase_start_ticks[GC_STARTUP_RISE] + 2,
+    };
+    GcBootConfig config;
+    GcBootControl control;
+    GcBootEvents events;
+    GcBootInput input = {.drive_state = GC_BOOT_DRIVE_PENDING};
+    assert(gc_boot_config_init(&config, &scene->startup));
+    const unsigned acceleration_samples[] = {1, 40, 80};
     /* A U-only coverage ramp makes transposed coordinates distinguishable
      * even where the original border mask is nearly symmetric. */
     uint8_t gradient[16 * 16 * 4];
@@ -110,14 +160,45 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
     gc_menu_init(menu, pal ? GC_REGION_EUROPE : GC_REGION_USA);
     uint8_t *actual = malloc((size_t)CC_FRAME_WIDTH * CC_FRAME_HEIGHT * 4);
     assert(actual);
-    for (unsigned sample = 0; sample < 4; ++sample) {
-        if (sample == 3)
-            isolated.trail_texture = mirrored_gradient_texture;
+    unsigned interrupt_count = sizeof(interruptions) / sizeof(interruptions[0]);
+    unsigned acceleration_count =
+        sizeof(acceleration_samples) / sizeof(acceleration_samples[0]);
+    unsigned seen_faces = 0;
+    bool saw_drop = false, saw_bounce = false, saw_stretched_trails = false;
+    for (unsigned sample = 0; sample < 4 + interrupt_count * acceleration_count;
+         ++sample) {
+        bool interrupted = sample >= 4;
+        isolated.trail_texture =
+            sample == 3 ? mirrored_gradient_texture : scene->trail_texture;
         GcStartupPose pose;
-        assert(gc_startup_sample_menu(&scene->startup, samples[sample], &pose));
-        assert(pose.phase == GC_STARTUP_ROLL && pose.trail_count > 0);
+        unsigned tick;
+        if (interrupted) {
+            unsigned request_tick = interruptions[(sample - 4) / acceleration_count];
+            unsigned spin_ticks =
+                acceleration_samples[(sample - 4) % acceleration_count];
+            assert(gc_boot_control_init(&config, &control, GC_BOOT_NORMAL));
+            for (unsigned frame = 0; frame < request_tick; ++frame)
+                assert(gc_boot_control_step(&config, &control, &input, &events));
+            gc_boot_control_request_menu(&control);
+            for (unsigned frame = 0; frame < spin_ticks; ++frame)
+                assert(gc_boot_control_step(&config, &control, &input, &events));
+            assert(gc_boot_control_sample_pose(&config, &control, &pose));
+            assert(pose.scene_phase == GC_STARTUP_SCENE_SPINNING);
+            tick = control.video_tick;
+            gc_scene_set_boot(&isolated, &config, &control);
+            saw_drop |= pose.moving_cube_world_y > 0 && pose.phase == GC_STARTUP_DROP;
+            saw_bounce |=
+                pose.moving_cube_world_y > 0 && pose.phase == GC_STARTUP_BOUNCE;
+        } else {
+            tick = samples[sample];
+            assert(gc_startup_sample_menu(&scene->startup, tick, &pose));
+            assert(pose.phase == GC_STARTUP_ROLL);
+        }
+        assert(interrupted || pose.trail_count > 0);
+        for (size_t trail = 0; trail < pose.trail_count; ++trail)
+            seen_faces |= 1u << pose.trails[trail].face;
         assert(!pose.perspective && !pose.menu_labels_alpha);
-        menu->startup_elapsed = (samples[sample] + 0.125) / scene->startup.frame_rate;
+        menu->startup_elapsed = (tick + 0.125) / scene->startup.frame_rate;
         gc_scene_draw(&isolated, menu);
         for (unsigned y = 0; y < CC_FRAME_HEIGHT; ++y)
             for (unsigned x = 0; x < CC_FRAME_WIDTH; ++x) {
@@ -141,8 +222,22 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
                 partial |=
                     expected[2] > 0 && expected[2] < scene->startup.trail_color[2];
             }
-        assert(visible > 100 && partial);
+        /* Spinning can turn a trail plane edge-on. Keep the fixed-view
+         * coverage check, and require visible tiles at maximum stretch. */
+        if (!interrupted)
+            assert(visible > 100 && partial);
+        else if (!pose.trail_count)
+            assert(!visible && !partial);
+        saw_stretched_trails |=
+            interrupted && pose.model_scale[1] > 1.38f && visible > 100 && partial;
+        if (interrupted && pose.moving_cube_alpha) {
+            isolated.moving_cube = scene->moving_cube;
+            gc_scene_draw(&isolated, menu);
+            startup_cube_vertices(&isolated, &pose);
+            isolated.moving_cube = NULL;
+        }
     }
+    assert(seen_faces == 7 && saw_drop && saw_bounce && saw_stretched_trails);
     cc_platform_destroy_texture(scene->platform, native_texture);
     cc_platform_destroy_texture(scene->platform, mirrored_gradient_texture);
     cc_platform_destroy_texture(scene->platform, gradient_texture);

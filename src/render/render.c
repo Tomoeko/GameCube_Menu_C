@@ -1312,7 +1312,8 @@ static void full_page_layers(GcScene *scene) {
     scene->value_alpha = scene->grid_alpha = scene->text_alpha = 1;
 }
 
-static void startup_trails(GcScene *scene, const GcStartupPose *pose) {
+static void startup_trails(GcScene *scene, const GcStartupPose *pose,
+                           const float formation_matrix[12]) {
     static const unsigned order[4] = {0, 1, 3, 2};
     /* Native USA/JAP 0x81310198 and EUR 0x81310ad0 pair cell X with V
      * and cell Y with U. The uploaded tile contains the full mirrored
@@ -1327,7 +1328,7 @@ static void startup_trails(GcScene *scene, const GcStartupPose *pose) {
         CcDrawVertex vertices[4];
         for (unsigned vertex = 0; vertex < 4; vertex++) {
             float point[3];
-            gc_startup_transform(pose->scene_matrix, trail->positions[order[vertex]],
+            gc_startup_transform(formation_matrix, trail->positions[order[vertex]],
                                  point);
             vertices[vertex] = (CcDrawVertex){
                 gc_render_projection_x(false, point[0]) + scene->display_offset_x,
@@ -1513,6 +1514,15 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
         glass_scale[axis * 5] = pose.glass_scale[axis];
         cover_scale[axis * 5] = pose.model_scale[axis] * 1.01f;
     }
+    /* USA/JAP 0x8130c478 and EUR 0x8130c90c scale the formation's
+     * basis before placing trails and the moving cube. Scaling only the
+     * large models leaves the small cube and tiles inside the stretched base.
+     * The origin and the later world-space drop/rise offset remain unscaled. */
+    float formation_matrix[12];
+    memcpy(formation_matrix, pose.scene_matrix, sizeof(formation_matrix));
+    for (unsigned row = 0; row < 3; row++)
+        for (unsigned axis = 0; axis < 3; axis++)
+            formation_matrix[row * 4 + axis] *= pose.model_scale[axis];
     /* Native 0x8130d3b8 draws the logotype first, then splits the cover
      * behind and in front of the trails, moving cube and completed mark. */
     if (scene->logotype) {
@@ -1537,10 +1547,10 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
     /* Native 0x813104ec draws every trail before submitting the opaque
      * moving cube. Its material disables depth, so reversing this order
      * lets trails overwrite the cube and falsely appear through it. */
-    startup_trails(scene, &pose);
+    startup_trails(scene, &pose, formation_matrix);
     if (pose.moving_cube_alpha) {
         float cube_scene[12];
-        memcpy(cube_scene, pose.scene_matrix, sizeof(cube_scene));
+        memcpy(cube_scene, formation_matrix, sizeof(cube_scene));
         cube_scene[7] += pose.moving_cube_world_y;
         gc_render_mesh_draw(scene, scene->moving_cube, cube_scene, pose.cube_matrix,
                             gc_render_projection_center_x(false), center_y,
