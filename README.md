@@ -2,25 +2,29 @@
 
 Place IPL files in `Files/GameCube_BIOS/{USA,EUR,JAP}/IPL.bin`.
 
-```sh
-git submodule update --init --recursive
-cmake -S . -B Files/build
-cmake --build Files/build --parallel
-Files/build/gamecube-menu
-```
-
 Metal is the macOS default. For GLES2, configure with `-DGC_BACKEND=gles2`;
 EGL, GLES2 and X11 system development libraries are required on Linux.
 
+```sh
+cd ~/Documents/
+git clone --recursive https://github.com/Tomoeko/GameCube_Menu_C
+cd GameCube_Menu_C
+cmake -S . -B Files/build
+cmake --build Files/build --parallel
+Files/build/gamecube-menu --ipl Files/GameCube_BIOS/EUR/IPL.bin --region EUR
+```
+
 On Windows, install Visual Studio 2026 with **Desktop development with C++**
 and **C++ CMake tools for Windows**. Open its **x64 Native Tools Command Prompt**
-in this repository. Run:
+in this repository. Run this under **x64 Native Tools Command Prompt**:
 
 ```bat
-git submodule update --init --recursive
-cmake -S . -B Files/build-windows -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=OFF
-cmake --build Files/build-windows --config Release --parallel
-Files\build-windows\Release\gamecube-menu.exe
+cd "C:\Users\[YourUsername]\Documents"
+git clone --recursive https://github.com/Tomoeko/GameCube_Menu_C
+cd "GameCube_Menu_C"
+cmake -S . -B Files\build-windows -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=OFF
+cmake --build Files\build-windows --config Release --parallel
+Files\build-windows\Release\gamecube-menu.exe --ipl Files\GameCube_BIOS\EUR\IPL.bin --region EUR
 ```
 
 Windows uses OpenGL 2.1 through the shared GLES2 renderer. Install your GPU driver.
