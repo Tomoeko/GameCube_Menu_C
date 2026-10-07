@@ -1464,8 +1464,21 @@ static void startup_menu_labels(GcScene *scene, const gc_menu *menu,
     face_panes(scene, menu, GC_LAYOUT_MENU);
 }
 
-static void draw_startup(GcScene *scene, const gc_menu *menu) {
+static void startup_logotype(GcScene *scene, const GcStartupPose *pose,
+                             float center_y) {
     const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    if (!scene->logotype)
+        return;
+    gc_ipl_animation_apply(&scene->logotype_joints, pose->logotype_frame,
+                           &scene->logotype->model);
+    gc_ipl_animation_apply(&scene->logotype_colors, pose->logotype_frame,
+                           &scene->logotype->model);
+    gc_render_mesh_draw(scene, scene->logotype, identity, identity,
+                        gc_render_projection_center_x(false), center_y,
+                        (float)pose->logotype_alpha / 255);
+}
+
+static void draw_startup(GcScene *scene, const gc_menu *menu) {
     GcStartupPose pose;
     double ticks = menu->startup_elapsed * scene->startup.frame_rate;
     if (!isfinite(ticks) || ticks < 0)
@@ -1523,21 +1536,18 @@ static void draw_startup(GcScene *scene, const gc_menu *menu) {
     for (unsigned row = 0; row < 3; row++)
         for (unsigned axis = 0; axis < 3; axis++)
             formation_matrix[row * 4 + axis] *= pose.model_scale[axis];
-    /* Native 0x8130d3b8 draws the logotype first, then splits the cover
-     * behind and in front of the trails, moving cube and completed mark. */
-    if (scene->logotype) {
-        gc_ipl_animation_apply(&scene->logotype_joints, pose.logotype_frame,
-                               &scene->logotype->model);
-        gc_ipl_animation_apply(&scene->logotype_colors, pose.logotype_frame,
-                               &scene->logotype->model);
-        gc_render_mesh_draw(scene, scene->logotype, identity, identity,
-                            gc_render_projection_center_x(false), center_y,
-                            (float)pose.logotype_alpha / 255);
-    }
+    /* Drawing submits the wordmark first. The perspective transition reverses
+     * those two objects (USA/JAP dab4, EUR e3c8) before adding the glass cube. */
+    bool transition = pose.scene_phase == GC_STARTUP_SCENE_TRANSITION ||
+                      pose.scene_phase == GC_STARTUP_SCENE_MENU;
+    if (!transition)
+        startup_logotype(scene, &pose, center_y);
     if (pose.base_cube_alpha)
         gc_render_mesh_draw(scene, scene->boot_base, pose.scene_matrix, model_scale,
                             gc_render_projection_center_x(false), center_y,
                             (float)pose.base_cube_alpha / 255);
+    if (transition)
+        startup_logotype(scene, &pose, center_y);
     if (pose.cover_cube_alpha) {
         scene->boot_cover->material_mask = 1u << 1;
         gc_render_mesh_draw(scene, scene->boot_cover, pose.scene_matrix, cover_scale,

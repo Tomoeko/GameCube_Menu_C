@@ -188,6 +188,43 @@ static void test_final_trail(const GcStartup *startup) {
     }
 }
 
+static void test_initial_impact_fade(const GcStartup *startup) {
+    /* USA/JAP c084 and EUR c518 multiply a signed-short wave by .93,
+     * truncate each update, and clear it below 10. These checkpoints begin
+     * at the one-shot 4000 impact, before its first decay update. */
+    const unsigned ages[] = {0, 1, 4, 10, 20, 30, 50, 75, 76, 77};
+    const unsigned amplitudes[] = {4000, 3720, 2990, 1932, 931, 447, 99, 11, 10, 0};
+    unsigned landing = startup->frame_rate == 50 ? 4 : 5;
+    assert(startup->drop_ticks == landing && startup->wave_decay[0] == 0.93f);
+    GcBootConfig config;
+    GcBootControl control;
+    GcBootEvents events;
+    GcBootInput input = {.drive_state = GC_BOOT_DRIVE_PENDING};
+    assert(gc_boot_config_init(&config, startup));
+    assert(gc_boot_control_init(&config, &control, GC_BOOT_NORMAL));
+    unsigned checkpoint = 0;
+    for (unsigned tick = 0; tick <= landing + 77; ++tick) {
+        GcStartupPose sampled, live;
+        assert(gc_startup_sample(startup, tick, &sampled));
+        assert(gc_boot_control_step(&config, &control, &input, &events));
+        assert(gc_boot_control_sample_pose(&config, &control, &live));
+        if (tick < landing) {
+            assert(sampled.moving_cube_world_y > 0);
+            assert(!sampled.waves[0] && !live.waves[0]);
+            assert(!sampled.base_cube_alpha && !live.base_cube_alpha);
+            continue;
+        }
+        if (tick - landing != ages[checkpoint])
+            continue;
+        unsigned amplitude = amplitudes[checkpoint++];
+        unsigned alpha = (amplitude > 3000 ? 3000 : amplitude) * 255 / 3000;
+        assert(sampled.waves[0] == amplitude && live.waves[0] == amplitude);
+        assert(!sampled.waves[1] && !live.waves[1]);
+        assert(sampled.base_cube_alpha == alpha && live.base_cube_alpha == alpha);
+    }
+    assert(checkpoint == sizeof(ages) / sizeof(ages[0]));
+}
+
 static void test_supplied_rom(const char *path) {
     GcStartup startup = {0};
     assert(gc_startup_load(path, &startup));
@@ -202,6 +239,7 @@ static void test_supplied_rom(const char *path) {
     assert(!memcmp(startup.phase_start_ticks, pal ? expected_pal : expected_ntsc,
                    sizeof(expected_ntsc)));
     test_final_trail(&startup);
+    test_initial_impact_fade(&startup);
     GcStartupPose pose;
     assert(gc_startup_sample(&startup, startup.sequence_ticks, &pose));
     assert(pose.complete && pose.trail_count == 16);

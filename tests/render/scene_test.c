@@ -244,6 +244,75 @@ static void startup_trail_combiner(GcScene *scene, gc_menu *menu) {
     free(actual);
 }
 
+static void startup_transition_order(GcScene *scene, gc_menu *menu) {
+    const float identity[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    const unsigned offsets[] = {0, 1, 4, 7, 10, 14, 20, 27};
+    GcScene isolated = *scene;
+    GcMesh empty_cover = {0};
+    GcIplJoint joint = {.parent = -1, .scale = {1, 1, 1}};
+    GcIplTriangle triangle = {.vertices = {{{-200, -200, 0}, {0, 0, 1}, {0, 0}},
+                                           {{200, -200, 0}, {0, 0, 1}, {0, 0}},
+                                           {{0, 200, 0}, {0, 0, 1}, {0, 0}}}};
+    GcIplMaterial source = {.color = {{255, 255, 255, 255}}, .stage_count = 1};
+    source.stages[0][0] = 4;
+    memset(source.orders, UINT8_MAX, sizeof(source.orders));
+    source.orders[0][2] = 4;
+    CcMaterialQuad material;
+    GcRenderMeshFace face;
+    assert(gc_render_material(&source, NULL, 0, &material));
+    GcMesh logotype = {.model = {.triangles = &triangle,
+                                 .triangle_count = 1,
+                                 .joints = &joint,
+                                 .joint_count = 1,
+                                 .materials = &source,
+                                 .material_count = 1},
+                       .faces = &face,
+                       .materials = &material};
+    /* A neutral plane makes submission order observable even when the
+     * original wordmark does not overlap the cube at a sampled pose. */
+    isolated.logotype = &logotype;
+    isolated.logotype_joints = isolated.logotype_colors = (GcIplAnimation){0};
+    isolated.boot_cover = &empty_cover;
+    isolated.menu_cube = isolated.boot_mark = isolated.moving_cube = NULL;
+    isolated.boot_config = NULL;
+    isolated.boot_control = NULL;
+    isolated.frame_counter_enabled = false;
+    bool saw_overlap = false;
+    gc_menu_init(menu,
+                 scene->startup.frame_rate == 50 ? GC_REGION_EUROPE : GC_REGION_USA);
+    for (unsigned index = 0; index < sizeof(offsets) / sizeof(offsets[0]); ++index) {
+        unsigned tick = scene->startup.sequence_ticks + scene->startup.spin_ticks - 1 +
+                        offsets[index];
+        GcStartupPose pose;
+        assert(gc_startup_sample_menu(&scene->startup, tick, &pose));
+        assert(pose.scene_phase == GC_STARTUP_SCENE_TRANSITION);
+        menu->startup_elapsed = (tick + 0.125) / scene->startup.frame_rate;
+        gc_scene_draw(&isolated, menu);
+        uint64_t actual = gc_software_frame_hash(scene->platform);
+        float scale[12] = {0};
+        for (unsigned axis = 0; axis < 3; ++axis)
+            scale[axis * 5] = pose.model_scale[axis];
+        float x = gc_render_projection_center_x(false);
+        float y = gc_render_projection_center_y(scene->startup.frame_rate == 50) +
+                  isolated.camera_y * scene->pixel_scale_y;
+        /* USA/JAP dab4 and EUR e3c8 submit the base before the logotype. */
+        cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
+        gc_render_mesh_draw(&isolated, scene->boot_base, pose.scene_matrix, scale, x, y,
+                            (float)pose.base_cube_alpha / 255);
+        gc_render_mesh_draw(&isolated, &logotype, identity, identity, x, y,
+                            (float)pose.logotype_alpha / 255);
+        uint64_t expected = gc_software_frame_hash(scene->platform);
+        assert(actual == expected);
+        cc_platform_begin(scene->platform, (CcColor){0, 0, 0, 1});
+        gc_render_mesh_draw(&isolated, &logotype, identity, identity, x, y,
+                            (float)pose.logotype_alpha / 255);
+        gc_render_mesh_draw(&isolated, scene->boot_base, pose.scene_matrix, scale, x, y,
+                            (float)pose.base_cube_alpha / 255);
+        saw_overlap |= expected != gc_software_frame_hash(scene->platform);
+    }
+    assert(saw_overlap);
+}
+
 static void startup_projection(GcScene *scene, gc_menu *menu) {
     const unsigned samples[] = {1, 2, 15, 30, 31, 45};
     GcBootConfig config;
@@ -552,6 +621,7 @@ int main(int argc, char **argv) {
     gc_menu_init(menu,
                  scene.startup.frame_rate == 50 ? GC_REGION_EUROPE : GC_REGION_USA);
     startup_trail_combiner(&scene, menu);
+    startup_transition_order(&scene, menu);
     startup_projection(&scene, menu);
     page_lifecycle(&scene, menu);
     calendar_captions(&scene, menu);
