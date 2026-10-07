@@ -167,11 +167,14 @@ static void update(const GcStartup *startup, StartupState *state) {
         unsigned duration = direction < 4 ? startup->roll_ticks : startup->corner_ticks;
         if (state->roll_counter > duration && state->step + 1 < startup->step_count)
             advance_step(startup, state);
-        ++state->roll_counter;
         if (startup->steps[state->step].direction == 7) {
+            /* USA/JAP 0x8130fd38 and EUR 0x81310670 enter the jump
+             * without advancing the reset fade counter. The final tile
+             * therefore stays transparent throughout the jump and reveal. */
             state->next_phase = GC_STARTUP_BOUNCE;
             state->counter = 0;
-        }
+        } else
+            ++state->roll_counter;
     } else if (state->phase == GC_STARTUP_BOUNCE) {
         ++state->counter;
         state->bounce_counter = state->counter;

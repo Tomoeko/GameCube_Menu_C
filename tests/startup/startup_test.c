@@ -1,4 +1,5 @@
 #include "gamecube/startup.h"
+#include "gamecube/boot_control.h"
 #include "gamecube/texture_collection.h"
 #include "console_common/support/endian.h"
 
@@ -140,6 +141,53 @@ static void test_original_trail_mask(const char *path, const GcIplImage *prepare
     gc_text_destroy(&text);
 }
 
+static void check_final_trail(const GcStartup *startup, const GcStartupPose *pose) {
+    float center = (float)startup->cube_edge * 1.5f;
+    unsigned hidden = 0, neighbors = 0;
+    assert(pose->trail_count == 16);
+    for (size_t index = 0; index < pose->trail_count; ++index) {
+        const GcStartupTrail *trail = &pose->trails[index];
+        const float *corner = trail->positions[0];
+        if (trail->face == 2 && corner[1] == center && corner[2] == center) {
+            ++hidden;
+            assert(trail->alpha == 0);
+        } else {
+            assert(trail->alpha == pose->moving_cube_alpha);
+            if (trail->face == 2 && corner[1] == center)
+                ++neighbors;
+        }
+    }
+    assert(hidden == 1 && neighbors == 2);
+}
+
+static void test_final_trail(const GcStartup *startup) {
+    /* IDA USA/JAP fd38 and EUR 10670 bypass the roll-counter increment
+     * on direction 7. The new center tile remains at zero opacity, while
+     * the two adjacent tiles stay visible until the global reveal fade. */
+    unsigned jump_tick = startup->phase_start_ticks[GC_STARTUP_BOUNCE] - 1;
+    GcStartupPose pose;
+    assert(gc_startup_sample(startup, jump_tick, &pose));
+    assert(pose.phase == GC_STARTUP_ROLL);
+    assert(startup->steps[pose.step_index].direction == 7);
+    for (unsigned tick = jump_tick; tick <= startup->sequence_ticks; ++tick) {
+        assert(gc_startup_sample(startup, tick, &pose));
+        check_final_trail(startup, &pose);
+    }
+    GcBootConfig config;
+    GcBootControl control;
+    GcBootEvents events;
+    GcBootInput input = {.drive_state = GC_BOOT_DRIVE_PENDING};
+    assert(gc_boot_config_init(&config, startup));
+    assert(gc_boot_control_init(&config, &control, GC_BOOT_NORMAL));
+    for (unsigned tick = 0; tick <= startup->sequence_ticks; ++tick) {
+        assert(gc_boot_control_step(&config, &control, &input, &events));
+        if (control.drawing_tick >= jump_tick && !control.drawing_complete) {
+            assert(gc_boot_control_sample_pose(&config, &control, &pose));
+            check_final_trail(startup, &pose);
+        }
+    }
+}
+
 static void test_supplied_rom(const char *path) {
     GcStartup startup = {0};
     assert(gc_startup_load(path, &startup));
@@ -153,6 +201,7 @@ static void test_supplied_rom(const char *path) {
     const unsigned expected_pal[GC_STARTUP_PHASE_COUNT] = {0, 19, 178, 200, 227, 269};
     assert(!memcmp(startup.phase_start_ticks, pal ? expected_pal : expected_ntsc,
                    sizeof(expected_ntsc)));
+    test_final_trail(&startup);
     GcStartupPose pose;
     assert(gc_startup_sample(&startup, startup.sequence_ticks, &pose));
     assert(pose.complete && pose.trail_count == 16);
