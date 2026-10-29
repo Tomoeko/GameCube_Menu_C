@@ -996,6 +996,14 @@ int main(int argc, char **argv) {
         gc_app_options_usage(stderr);
         return parsed_options == GC_APP_OPTIONS_HELP ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    GcAppIplResult resolved_ipl = gc_app_options_resolve_ipl(&options);
+    if (resolved_ipl != GC_APP_IPL_OK) {
+        fprintf(stderr,
+                resolved_ipl == GC_APP_IPL_REGION_MISMATCH
+                    ? "The selected region does not match the IPL resource profile.\n"
+                    : "Cannot read or identify the local IPL resource profile.\n");
+        return EXIT_FAILURE;
+    }
     CcDisplaySettings display = {.antialiasing = true};
     if (!cc_display_settings_load_project(&display)) {
         fprintf(stderr, "Could not read or create Files/display.json.\n");

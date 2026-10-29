@@ -1,6 +1,11 @@
 # GameCube Menu C
 
 Place IPL files in `Files/GameCube_BIOS/{USA,EUR,JAP}/IPL.bin`.
+Running without arguments uses `Files/GameCube_BIOS/EUR/IPL.bin` and EUR settings.
+With `--ipl`, the app detects PAL/EUR or NTSC/USA from the IPL resources, regardless
+of the filename. NTSC IPLs contain both English and Japanese resources; use
+`--region JAP` to select Japanese mode. `--region` alone selects the corresponding
+bundled IPL, so specifying both arguments is optional.
 
 Metal is the macOS default. For GLES2, configure with `-DGC_BACKEND=gles2`;
 EGL, GLES2 and X11 system development libraries are required on Linux.
@@ -13,7 +18,7 @@ git clone --recursive https://github.com/Tomoeko/GameCube_Menu_C
 cd GameCube_Menu_C
 cmake -S . -B Files/build
 cmake --build Files/build --parallel
-Files/build/gamecube-menu --ipl Files/GameCube_BIOS/EUR/IPL.bin --region EUR
+Files/build/gamecube-menu
 ```
 
 On Windows, install Visual Studio 2026 with **Desktop development with C++**
@@ -26,7 +31,7 @@ git clone --recursive https://github.com/Tomoeko/GameCube_Menu_C
 cd "GameCube_Menu_C"
 cmake -S . -B Files\build-windows -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=OFF
 cmake --build Files\build-windows --config Release --parallel
-Files\build-windows\Release\gamecube-menu.exe --ipl Files\GameCube_BIOS\EUR\IPL.bin --region EUR
+Files\build-windows\Release\gamecube-menu.exe
 ```
 
 Windows uses OpenGL 2.1 through the shared GLES2 renderer. Install your GPU driver.
@@ -40,8 +45,8 @@ Files\build-windows\Release\gc-ipl-tool.exe prepare Files/GameCube_BIOS/USA/IPL.
 ```
 
 ```sh
-Files/build/gamecube-menu --ipl Files/input/IPL.bin --region USA
-Files/build/gamecube-menu --region EUR
+Files/build/gamecube-menu --ipl Files/input/IPL.bin
+Files/build/gamecube-menu --region USA
 Files/build/gamecube-menu --region JAP
 Files/build/gamecube-menu --skip-startup
 Files/build/gamecube-menu --delaystart

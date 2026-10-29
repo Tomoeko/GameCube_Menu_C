@@ -772,6 +772,56 @@ static void test_actual_recording(const char *ipl_path, const char *region,
     free(saved_home);
 }
 
+static void write_region_ipl(const char *source_path, const char *fixture_path) {
+    uint8_t *rom = NULL;
+    assert(gc_ipl_rom_read(source_path, &rom));
+    FILE *file = fopen(fixture_path, "wb");
+    assert(file);
+    assert(fwrite(rom, 1, GC_IPL_ROM_SIZE, file) == GC_IPL_ROM_SIZE);
+    assert(fclose(file) == 0);
+    free(rom);
+}
+
+static void test_ipl_region_resolution(const char *ipl_path, const char *region) {
+    const char *fixture = "Files/region-profile.bin";
+    write_region_ipl(ipl_path, fixture);
+    GcAppOptions options;
+    char *automatic[] = {"gamecube-menu", "--ipl", (char *)fixture};
+    assert(gc_app_options_parse(&options, 3, automatic) == GC_APP_OPTIONS_OK);
+    assert(!options.region_override);
+    assert(gc_app_options_resolve_ipl(&options) == GC_APP_IPL_OK);
+    bool europe = !strcmp(region, "EUR");
+    assert(options.region == (europe ? GC_REGION_EUROPE : GC_REGION_USA));
+    assert(!strcmp(options.state_path,
+                   europe ? "Files/state-eur.dat" : "Files/state-usa.dat"));
+    const char *regions[] = {"JAP", "USA", "EUR"};
+    for (unsigned index = 0; index < 3; index++) {
+        char *explicit_region[] = {"gamecube-menu", "--ipl", (char *)fixture,
+                                   "--region", (char *)regions[index]};
+        assert(gc_app_options_parse(&options, 5, explicit_region) == GC_APP_OPTIONS_OK);
+        GcAppOptions before = options;
+        GcAppIplResult resolved = gc_app_options_resolve_ipl(&options);
+        if (europe != (index == GC_REGION_EUROPE)) {
+            assert(resolved == GC_APP_IPL_REGION_MISMATCH);
+            assert(!memcmp(&options, &before, sizeof(options)));
+        } else {
+            assert(resolved == GC_APP_IPL_OK && options.region == (gc_region)index);
+        }
+    }
+    assert(remove(fixture) == 0);
+    char *missing[] = {"gamecube-menu", "--ipl", (char *)fixture};
+    assert(gc_app_options_parse(&options, 3, missing) == GC_APP_OPTIONS_OK);
+    GcAppOptions before = options;
+    assert(gc_app_options_resolve_ipl(&options) == GC_APP_IPL_UNSUPPORTED);
+    assert(!memcmp(&options, &before, sizeof(options)));
+    FILE *file = fopen(fixture, "wb");
+    assert(file && fputs("invalid IPL", file) >= 0 && fclose(file) == 0);
+    assert(gc_app_options_resolve_ipl(&options) == GC_APP_IPL_UNSUPPORTED);
+    assert(!memcmp(&options, &before, sizeof(options)));
+    assert(remove(fixture) == 0);
+    assert(gc_app_options_resolve_ipl(NULL) == GC_APP_IPL_UNSUPPORTED);
+}
+
 int main(int argc, char **argv) {
     test_window_controls();
     test_startup_confirm_events();
@@ -779,6 +829,7 @@ int main(int argc, char **argv) {
     test_paused_volume_recording();
     if (argc < 3)
         return EXIT_SUCCESS;
+    test_ipl_region_resolution(argv[1], argv[2]);
     GcConfig config;
     gc_config_init(&config);
     config.dummy_data[0] = config.dummy_data[1] = true;
@@ -808,7 +859,7 @@ int main(int argc, char **argv) {
         assert(test_application_main(11, arguments) == EXIT_SUCCESS);
         assert(drawn_counter == 1 && drawn_frames == 2);
     }
-    if (expected_region == GC_REGION_USA) {
+    if (expected_region != GC_REGION_JAPAN) {
         absent_mask = 0;
         event_phase = drawn_frames = 0;
         drawn_counter = 0;
@@ -816,6 +867,19 @@ int main(int argc, char **argv) {
                              "--step"};
         assert(test_application_main(5, arguments) == EXIT_SUCCESS);
         assert(drawn_counter == 1 && drawn_frames == 2);
+    }
+    if (expected_region == GC_REGION_EUROPE) {
+        assert(mkdir("Files/GameCube_BIOS", 0700) == 0 || errno == EEXIST);
+        assert(mkdir("Files/GameCube_BIOS/EUR", 0700) == 0 || errno == EEXIST);
+        const char *default_ipl = "Files/GameCube_BIOS/EUR/IPL.bin";
+        write_region_ipl(argv[1], default_ipl);
+        absent_mask = 0;
+        event_phase = drawn_frames = 0;
+        drawn_counter = 0;
+        char *arguments[] = {"gamecube-menu", "--skip-startup", "--step"};
+        assert(test_application_main(3, arguments) == EXIT_SUCCESS);
+        assert(drawn_counter == 1 && drawn_frames == 2);
+        assert(remove(default_ipl) == 0);
     }
     test_disc_events = true;
     absent_mask = 0;

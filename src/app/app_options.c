@@ -1,6 +1,7 @@
 #include "app_options.h"
 #include "support/option_values.h"
 #include "gamecube/config.h"
+#include "gamecube/text.h"
 
 #include <limits.h>
 #include <string.h>
@@ -23,6 +24,7 @@ static bool parse_value(GcAppOptions *options, const char *flag, const char *val
         options->ipl_path = value;
         *explicit_ipl = true;
     } else if (!strcmp(flag, "--region")) {
+        options->region_override = true;
         return gc_option_region(value, &options->region);
     } else if (!strcmp(flag, "--config")) {
         options->config_path = value;
@@ -55,11 +57,17 @@ static bool parse_value(GcAppOptions *options, const char *flag, const char *val
     return true;
 }
 
+static const char *region_state_path(gc_region region) {
+    static const char *const paths[] = {"Files/state-jap.dat", "Files/state-usa.dat",
+                                        "Files/state-eur.dat"};
+    return (unsigned)region < sizeof(paths) / sizeof(paths[0]) ? paths[region] : NULL;
+}
+
 GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
                                         char *const argv[]) {
     if (!options || argc < 1 || !argv)
         return GC_APP_OPTIONS_INVALID;
-    GcAppOptions candidate = {.region = GC_REGION_USA,
+    GcAppOptions candidate = {.region = GC_REGION_EUROPE,
                               .config_path = "Files/config.ini",
                               .boot_phase = GC_BOOT_NORMAL,
                               .antialiasing = true};
@@ -108,13 +116,27 @@ GcAppOptionsResult gc_app_options_parse(GcAppOptions *options, int argc,
     }
     if (explicit_audio && !candidate.record)
         return GC_APP_OPTIONS_INVALID;
-    static const char *const region_states[] = {
-        "Files/state-jap.dat", "Files/state-usa.dat", "Files/state-eur.dat"};
     if (!explicit_ipl)
         candidate.ipl_path = gc_option_default_ipl(candidate.region);
-    candidate.state_path = region_states[candidate.region];
+    candidate.state_path = region_state_path(candidate.region);
     *options = candidate;
     return GC_APP_OPTIONS_OK;
+}
+
+GcAppIplResult gc_app_options_resolve_ipl(GcAppOptions *options) {
+    if (!options || !region_state_path(options->region))
+        return GC_APP_IPL_UNSUPPORTED;
+    GcText text = {0};
+    if (!gc_text_load(options->ipl_path, &text))
+        return GC_APP_IPL_UNSUPPORTED;
+    bool europe = text.europe;
+    gc_text_destroy(&text);
+    if (options->region_override && europe != (options->region == GC_REGION_EUROPE))
+        return GC_APP_IPL_REGION_MISMATCH;
+    if (!options->region_override)
+        options->region = europe ? GC_REGION_EUROPE : GC_REGION_USA;
+    options->state_path = region_state_path(options->region);
+    return GC_APP_IPL_OK;
 }
 
 void gc_app_options_usage(FILE *output) {
@@ -135,6 +157,9 @@ void gc_app_options_usage(FILE *output) {
             "       Audio stays unchanged without --audio.\n"
             "       half records half width and height.\n"
             "       [--aa | --no-aa] (override Files/display.json; default on)\n"
+            "Default IPL: Files/GameCube_BIOS/EUR/IPL.bin (EUR).\n"
+            "--ipl detects PAL/EUR or NTSC/USA from the resource profile.\n"
+            "--region selects a bundled IPL or overrides NTSC USA/JAP mode.\n"
             "Arrow keys select, A/Enter confirm, B/Escape cancel, S starts.\n"
             "F toggles fullscreen; Escape at the home cube exits fullscreen.\n"
             "R restarts startup from frame 0 (preserving the --step pause state).\n"
