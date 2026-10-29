@@ -4,6 +4,8 @@ Place IPL files in `Files/GameCube_BIOS/{USA,EUR,JAP}/IPL.bin`.
 
 Metal is the macOS default. For GLES2, configure with `-DGC_BACKEND=gles2`;
 EGL, GLES2 and X11 system development libraries are required on Linux.
+After pulling updates, run `git submodule update --init --recursive` before
+rebuilding so the shared Common renderer matches this revision.
 
 ```sh
 cd ~/Documents/
@@ -66,6 +68,8 @@ Files/build/gamecube-menu --help
 
 Arrow keys select. A/Enter confirms; B/Escape/Backspace cancels; S starts.
 F toggles fullscreen. Escape at the home cube exits fullscreen.
+Metal window rendering fits within 2560 × 1440 pixels and scales to the display,
+retaining antialiasing. Recording keeps the full window backing resolution.
 R restarts startup from frame 0; `--step` keeps its current pause/play state.
 D inserts/ejects test media; E toggles the test error; Z selects the alternate
 startup sound. With `--step`, comma rewinds, period advances, and Space plays/pauses.
