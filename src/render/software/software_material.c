@@ -266,7 +266,7 @@ static bool tev_material_color(const GcSoftwareTexture *textures,
                                CcColor *color) {
     float registers[4][4] = {{0}};
     /* C11 needs an explicit conversion when qualifying a nested array. */
-    const float (*inputs)[4] = (const float (*)[4])registers;
+    const float(*inputs)[4] = (const float(*)[4])registers;
     memcpy(registers + 1, material->registers, sizeof(material->registers));
     for (unsigned index = 0; index < material->tev_stage_count; ++index) {
         const uint8_t *stage = material->tev_stages[index];
