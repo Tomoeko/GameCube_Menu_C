@@ -265,6 +265,8 @@ static bool tev_material_color(const GcSoftwareTexture *textures,
                                const unsigned indices[3], const float weights[3],
                                CcColor *color) {
     float registers[4][4] = {{0}};
+    /* C11 needs an explicit conversion when qualifying a nested array. */
+    const float (*inputs)[4] = (const float (*)[4])registers;
     memcpy(registers + 1, material->registers, sizeof(material->registers));
     for (unsigned index = 0; index < material->tev_stage_count; ++index) {
         const uint8_t *stage = material->tev_stages[index];
@@ -281,8 +283,8 @@ static bool tev_material_color(const GcSoftwareTexture *textures,
         swizzle(texture, material->tev_swap_table[stage[3] >> 3 & 3]);
         swizzle(raster, material->tev_swap_table[stage[3] >> 1 & 3]);
         float rgb[3];
-        tev_color(material, stage, registers, texture, raster, rgb);
-        float alpha = tev_alpha(material, stage, registers, texture, raster);
+        tev_color(material, stage, inputs, texture, raster, rgb);
+        float alpha = tev_alpha(material, stage, inputs, texture, raster);
         unsigned color_destination = stage[7] >> 1 & 3;
         unsigned alpha_destination = stage[11] >> 1 & 3;
         memcpy(registers[color_destination], rgb, sizeof(rgb));
