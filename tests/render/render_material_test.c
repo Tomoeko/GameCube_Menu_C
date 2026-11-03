@@ -35,8 +35,8 @@ static void compare_material(GcIplMaterial *source, const uint8_t texel[4],
     assert(converted.has_blend_mode && converted.blend_mode[0] == 1 &&
            converted.blend_mode[1] == 4 && converted.blend_mode[2] == 5);
     for (unsigned vertex = 0; vertex < 4; ++vertex) {
-        converted.vertices[vertex].x = vertex & 1 ? 2 : 0;
-        converted.vertices[vertex].y = vertex & 2 ? 2 : 0;
+        converted.vertices[vertex].x = vertex & 1 ? 2.0f : 0.0f;
+        converted.vertices[vertex].y = vertex & 2 ? 2.0f : 0.0f;
         converted.vertices[vertex].color =
             (CcColor){(float)raster[0] / 255, (float)raster[1] / 255,
                       (float)raster[2] / 255, (float)raster[3] / 255};
@@ -78,8 +78,8 @@ static void test_native_global_state_and_opacity(const char *path) {
     CcMaterialQuad material;
     assert(texture && gc_render_material(&source, &texture, 1, &material));
     for (unsigned vertex = 0; vertex < 4; ++vertex) {
-        material.vertices[vertex].x = vertex & 1 ? 2 : 0;
-        material.vertices[vertex].y = vertex & 2 ? 2 : 0;
+        material.vertices[vertex].x = vertex & 1 ? 2.0f : 0.0f;
+        material.vertices[vertex].y = vertex & 2 ? 2.0f : 0.0f;
         material.vertices[vertex].color = (CcColor){1, 1, 1, 1};
     }
     const float opacity[] = {0, 0.25f, 0.5f, 1};

@@ -68,6 +68,7 @@ bool gc_ipl_material_shade(const GcIplMaterial *material, const uint8_t texture[
     if (!material || !texture || !raster || !output || material->stage_count > 8)
         return false;
     float registers[4][4] = {{0}};
+    const float(*register_inputs)[4] = (const float(*)[4])registers;
     for (unsigned index = 0; index < 3; ++index)
         for (unsigned component = 0; component < 4; ++component)
             registers[index + 1][component] = material->registers[index][component];
@@ -103,8 +104,8 @@ bool gc_ipl_material_shade(const GcIplMaterial *material, const uint8_t texture[
             for (unsigned input = 0; input < 4; ++input) {
                 if (program[input + 1] > 15)
                     return false;
-                inputs[input] = color_input(program[input + 1], component, registers,
-                                            texture, raster);
+                inputs[input] = color_input(program[input + 1], component,
+                                            register_inputs, texture, raster);
             }
             if (!combine(program, 5, inputs, &results[component]))
                 return false;
@@ -114,7 +115,7 @@ bool gc_ipl_material_shade(const GcIplMaterial *material, const uint8_t texture[
             if (program[input + 10] > 7)
                 return false;
             inputs[input] =
-                alpha_input(program[input + 10], registers, texture, raster);
+                alpha_input(program[input + 10], register_inputs, texture, raster);
         }
         if (!combine(program, 14, inputs, &results[3]))
             return false;

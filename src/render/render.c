@@ -257,18 +257,21 @@ static void menu_animation_sync(GcScene *scene, const gc_menu *menu) {
         const size_t rows[2] = {gc_menu_card_first_row(menu, 0),
                                 gc_menu_card_first_row(menu, 1)};
         float centers[2][16][2];
+        /* C11 needs an explicit conversion for const-qualified nested arrays. */
+        const float(*layout_centers)[16][2] = (const float(*)[16][2])centers;
         if ((!was_card_page || !scene->card_cells.initialized) &&
             card_cell_layout(scene, centers))
-            gc_card_cells_begin(&scene->card_cell_style, &scene->card_cells, centers,
-                                rows, scene->card_random, scene->card_random_context);
+            gc_card_cells_begin(&scene->card_cell_style, &scene->card_cells,
+                                layout_centers, rows, scene->card_random,
+                                scene->card_random_context);
         else if (!scene->card_cells.entrance &&
                  !(scene->card_operation_active &&
                    scene->card_operation.erase_active) &&
                  (rows[0] != scene->card_cells.first_rows[0] ||
                   rows[1] != scene->card_cells.first_rows[1]) &&
                  card_cell_layout(scene, centers))
-            gc_card_cells_relayout(&scene->card_cell_style, &scene->card_cells, centers,
-                                   rows);
+            gc_card_cells_relayout(&scene->card_cell_style, &scene->card_cells,
+                                   layout_centers, rows);
     }
     gc_face_geometry_set_clock(&scene->face_geometry_state, &menu->clock);
     /* The editor's CAFD counter begins only after every native face point has
@@ -386,7 +389,7 @@ static void menu_animation_sync(GcScene *scene, const gc_menu *menu) {
         }
     }
     if (scene->card_erasing) {
-        if (!card_page || video_ticks >= 14 - scene->card_erase_tick)
+        if (!card_page || video_ticks >= (uint64_t)(14 - scene->card_erase_tick))
             scene->card_erasing = false;
         else
             scene->card_erase_tick = (uint8_t)(scene->card_erase_tick + video_ticks);
@@ -510,8 +513,8 @@ static void face_geometry(GcScene *scene) {
                 !point.alpha || point.model > GC_FACE_MODEL_CARD_COVER)
                 continue;
             gc_render_mesh_piece(scene, models[point.model], point.matrix, point.scale,
-                                 point.registers, point.register_mask,
-                                 (float)point.alpha / 255);
+                                 (const int16_t(*)[4])point.registers,
+                                 point.register_mask, (float)point.alpha / 255);
         }
 }
 
@@ -533,7 +536,8 @@ static void edit_points_draw(GcScene *scene, size_t count) {
         /* Native 2e0f0 submits RGB with register alpha255, folding the
          * palette alpha into the model opacity rather than the TEV input. */
         registers[0][3] = registers[1][3] = 255;
-        gc_render_mesh_piece(scene, scene->glyph_cube, matrix, scale, registers, 3,
+        gc_render_mesh_piece(scene, scene->glyph_cube, matrix, scale,
+                             (const int16_t(*)[4])registers, 3,
                              (float)(point->alpha * point->colors[0][3]) / 65025);
     }
     scene->perspective = perspective;
@@ -683,11 +687,12 @@ bool gc_scene_card_relayout(GcScene *scene, const gc_menu *menu,
     float centers[2][16][2];
     if (!card_cell_layout(scene, centers))
         return false;
+    const float(*layout_centers)[16][2] = (const float(*)[16][2])centers;
     const size_t rows[2] = {gc_menu_card_first_row(menu, 0),
                             gc_menu_card_first_row(menu, 1)};
     if (operation->result)
         return gc_card_cells_relayout(&scene->card_cell_style, &scene->card_cells,
-                                      centers, rows);
+                                      layout_centers, rows);
     unsigned source_slot = operation->source_slot;
     bool transfer = operation->action == GC_CARD_ACTION_COPY ||
                     operation->action == GC_CARD_ACTION_MOVE;
@@ -736,8 +741,8 @@ bool gc_scene_card_relayout(GcScene *scene, const gc_menu *menu,
             cell->selection = cell->drawn_selection = 0;
         }
     }
-    return gc_card_cells_relayout(&scene->card_cell_style, &scene->card_cells, centers,
-                                  rows);
+    return gc_card_cells_relayout(&scene->card_cell_style, &scene->card_cells,
+                                  layout_centers, rows);
 }
 
 static void draw_card_point(GcScene *scene, const GcFaceGeometryPoint *point,
@@ -924,8 +929,8 @@ static void draw_card_particles(GcScene *scene) {
         for (unsigned pass = 0; pass < 2; pass++) {
             scene->card_cover->material_mask = 1u << materials[pass];
             gc_render_mesh_piece(scene, scene->card_cover, point.matrix, point.scale,
-                                 point.registers, point.register_mask,
-                                 (float)point.alpha / 255);
+                                 (const int16_t(*)[4])point.registers,
+                                 point.register_mask, (float)point.alpha / 255);
         }
     }
     scene->card_cover->material_mask = 0;

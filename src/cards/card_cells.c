@@ -190,7 +190,8 @@ static void advance_tick(const GcCardCellStyle *style, GcCardCells *state,
             if (cell->counter >= cell->delay)
                 cell->alpha =
                     cell->target_alpha
-                        ? (uint8_t)(255 - cell->alpha < step ? 255 : cell->alpha + step)
+                        ? (uint8_t)(255u - cell->alpha < step ? 255u
+                                                              : cell->alpha + step)
                         : (uint8_t)(cell->alpha < step ? 0 : cell->alpha - step);
             for (unsigned axis = 0; axis < 3; ++axis) {
                 float position = interpolate(cell, axis);
@@ -218,7 +219,7 @@ bool gc_card_cells_advance(const GcCardCellStyle *style, GcCardCells *state,
     if (!face_ready || !ticks)
         return true;
     unsigned limit =
-        style->entrance_ticks + style->delay_mask + style->relayout_ticks + 34;
+        34u + style->entrance_ticks + style->delay_mask + style->relayout_ticks;
     uint64_t steps = ticks < limit ? ticks : limit;
     for (uint64_t tick = 0; tick < steps; ++tick) {
         if (!erasing)

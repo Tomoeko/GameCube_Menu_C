@@ -36,7 +36,9 @@ static void test_delay_collapse_and_readiness(void) {
     GcCardCells state = {0};
     Samples samples = {0, 1000};
     make_centers(centers);
-    assert(gc_card_cells_begin(&style, &state, centers, rows, random_sample, &samples));
+    const float(*layout_centers)[16][2] = (const float(*)[16][2])centers;
+    assert(gc_card_cells_begin(&style, &state, layout_centers, rows, random_sample,
+                               &samples));
     assert(samples.count == 508);
     GcCardCell *cell = &state.cells[0][0];
     assert(cell->delay == 15 && cell->duration == 75);
@@ -73,15 +75,16 @@ static void test_scroll_and_atomic_samples(void) {
     const bool ready[2] = {true, false};
     GcCardCells state = {0};
     make_centers(centers);
-    assert(gc_card_cells_begin(&style, &state, centers, first, NULL, NULL));
+    const float(*layout_centers)[16][2] = (const float(*)[16][2])centers;
+    assert(gc_card_cells_begin(&style, &state, layout_centers, first, NULL, NULL));
     GcCardCells before = state;
     Samples samples = {0, 3};
-    assert(
-        !gc_card_cells_begin(&style, &state, centers, first, random_sample, &samples));
+    assert(!gc_card_cells_begin(&style, &state, layout_centers, first, random_sample,
+                                &samples));
     assert(memcmp(&before, &state, sizeof(state)) == 0);
     assert(gc_card_cells_advance(&style, &state, ready, true, true, false, 0, 0, 100));
     assert(!state.entrance);
-    assert(gc_card_cells_relayout(&style, &state, centers, scrolled));
+    assert(gc_card_cells_relayout(&style, &state, layout_centers, scrolled));
     assert(state.cells[0][0].target_alpha == 0);
     assert(state.cells[0][4].target_alpha == 255);
     assert(state.cells[0][19].target_alpha == 255);
@@ -126,7 +129,8 @@ static void test_native(const char *path) {
     GcCardCells state = {0};
     const size_t rows[2] = {0, 0};
     const bool ready[2] = {true, true};
-    assert(gc_card_cells_begin(&recovered, &state, centers, rows, NULL, NULL));
+    const float(*layout_centers)[16][2] = (const float(*)[16][2])centers;
+    assert(gc_card_cells_begin(&recovered, &state, layout_centers, rows, NULL, NULL));
     assert(gc_card_cells_advance(&recovered, &state, ready, true, true, false, 0, 0,
                                  recovered.entrance_ticks + 2));
     assert(!state.entrance && gc_card_cells_ready(&state, ready));

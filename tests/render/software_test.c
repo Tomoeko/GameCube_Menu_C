@@ -10,10 +10,10 @@
 static CcMaterialQuad material_quad(void) {
     CcMaterialQuad quad = {0};
     for (unsigned vertex = 0; vertex < 4; ++vertex) {
-        quad.vertices[vertex].x = vertex & 1 ? 2 : 0;
-        quad.vertices[vertex].y = vertex & 2 ? 2 : 0;
-        quad.vertices[vertex].uv[0][0] = vertex & 1 ? 1 : 0;
-        quad.vertices[vertex].uv[0][1] = vertex & 2 ? 1 : 0;
+        quad.vertices[vertex].x = vertex & 1 ? 2.0f : 0.0f;
+        quad.vertices[vertex].y = vertex & 2 ? 2.0f : 0.0f;
+        quad.vertices[vertex].uv[0][0] = vertex & 1 ? 1.0f : 0.0f;
+        quad.vertices[vertex].uv[0][1] = vertex & 2 ? 1.0f : 0.0f;
         quad.vertices[vertex].color = (CcColor){1, 1, 1, 1};
     }
     memset(quad.tev_swap_table, 0xe4, sizeof(quad.tev_swap_table));
@@ -441,8 +441,8 @@ static void test_simple_material_fallback(CcPlatform *platform) {
     for (unsigned component = 0; component < 4; ++component)
         quad.registers[1][component] = 1;
     for (unsigned vertex = 0; vertex < 4; ++vertex) {
-        quad.vertices[vertex].x = vertex & 1 ? 4 : 0;
-        quad.vertices[vertex].y = vertex & 2 ? 2 : 0;
+        quad.vertices[vertex].x = vertex & 1 ? 4.0f : 0.0f;
+        quad.vertices[vertex].y = vertex & 2 ? 2.0f : 0.0f;
         quad.vertices[vertex].uv[1][0] = quad.vertices[vertex].uv[0][0];
         quad.vertices[vertex].uv[1][1] = quad.vertices[vertex].uv[0][1];
     }

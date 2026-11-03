@@ -155,10 +155,10 @@ bool gc_help_pane(const GcHelpStyle *style, const GcHelpState *state,
         unsigned item = index - 10;
         memcpy(name, names[item], sizeof(name));
         slot = slots[item];
-        value = state->control_intro * alpha / 255;
+        value = (unsigned)state->control_intro * alpha / 255u;
         color = item % 2 || item >= 8 ? style->dots : style->controls[slot % 3];
     }
-    value = value * (state->icons[slot] * 255 / 20) / 255;
+    value = value * (state->icons[slot] * 255u / 20u) / 255u;
     candidate.tint = opacity(color, value);
     if (!gc_layout_find_pane(table, name, 0, &candidate.pane) ||
         !gc_layout_pane_quad(&candidate.pane, candidate.vertices))

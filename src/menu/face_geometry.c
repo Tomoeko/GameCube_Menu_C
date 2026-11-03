@@ -922,10 +922,10 @@ bool gc_face_geometry_advance(const GcFaceGeometry *geometry,
                      100, ticks);
         advance_rock(&state->gameplay_angles[2], &state->gameplay_steps[1], -8200, 8200,
                      50, ticks);
-        unsigned phase =
-            ((state->gameplay_phase + 4095) % 4096 + (unsigned)(ticks % 4096) * 409) %
-                4096 +
-            1;
+        unsigned phase = ((state->gameplay_phase + 4095u) % 4096u +
+                          (unsigned)(ticks % 4096) * 409u) %
+                             4096u +
+                         1u;
         state->gameplay_phase = (uint16_t)phase;
         unsigned previous = (phase + 4095 - 409) % 4096 + 1;
         for (unsigned i = 0; i < 16; ++i) {
