@@ -75,6 +75,9 @@ Arrow keys select. A/Enter confirms; B/Escape/Backspace cancels; S starts.
 F toggles fullscreen. Escape at the home cube exits fullscreen.
 Metal window rendering fits within 2560 × 1440 pixels and scales to the display,
 retaining antialiasing. Recording keeps the full window backing resolution.
+Shared Metal material variants are prepared before rendering to reduce GPU work
+without changing sampling or effects. GitHub builds and tests macOS, Windows,
+and Linux/GLES2; Linux tests use a virtual display.
 R restarts startup from frame 0; `--step` keeps its current pause/play state.
 D inserts/ejects test media; E toggles the test error; Z selects the alternate
 startup sound. With `--step`, comma rewinds, period advances, and Space plays/pauses.
