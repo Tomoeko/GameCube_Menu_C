@@ -70,12 +70,12 @@ jobs:
         run: python3 Common/tools/ci_build.py Files/build
       - name: Test portable behavior
         if: runner.os != 'Linux'
-        run: ctest --test-dir Files/build -C Release -j 1 --timeout 30 --output-on-failure -R "^(cc-|gc-(audio|navigation|config|state|services|app-options|frame-history|cli|tool-output))"
+        run: ctest --test-dir Files/build -C Release -j 1 --timeout 30 --output-on-failure -R "^(cc-|gc-(audio|navigation|config|state|services|app-options|frame-history|cli|tool-output|render-material))"
       - name: Test portable behavior on GLES2
         if: runner.os == 'Linux'
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
-        run: xvfb-run -a ctest --test-dir Files/build -C Release -j 1 --timeout 30 --output-on-failure -R "^(cc-|gc-(audio|navigation|config|state|services|app-options|frame-history|cli|tool-output))"
+        run: xvfb-run -a ctest --test-dir Files/build -C Release -j 1 --timeout 30 --output-on-failure -R "^(cc-|gc-(audio|navigation|config|state|services|app-options|frame-history|cli|tool-output|render-material))"
       - name: Stage app and tools
         run: cmake --install Files/build --config Release --prefix Files/package --component Runtime
       - name: Archive Unix build with executable permissions
